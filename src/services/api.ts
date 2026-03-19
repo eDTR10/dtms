@@ -88,6 +88,18 @@ export interface DocumentSignatory {
   remarks: string;
 }
 
+export interface DocumentFile {
+  id: number;
+  document: number;
+  file: string;
+  file_url: string;
+  uploaded_by: number;
+  uploaded_by_name: string;
+  uploaded_at: string;
+  file_type: "original" | "signed" | "signatory_upload";
+  remarks: string;
+}
+
 export interface Document {
   id: number;
   userID: number;
@@ -106,6 +118,7 @@ export interface Document {
   template: number | null;
   file: string | null;
   file_url: string | null;
+  files: DocumentFile[];
   signatories: DocumentSignatory[];
   total_signatories: number;
   signed_count: number;
@@ -215,7 +228,7 @@ export const documentApi = {
     signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number }>;
   }) => api.post<Document>(`document/${id}/send/`, payload).then(r => r.data),
 
-  /** Upload signed PDF back to server */
+  /** Upload signed PDF back to server (single-file, legacy) */
   uploadSigned: (id: number, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -223,6 +236,30 @@ export const documentApi = {
       headers: { "Content-Type": "multipart/form-data" },
     }).then(r => r.data);
   },
+
+  /**
+   * Batch-sign N DocumentFile records in a single PATCH request.
+   * FormData must contain file_0/file_id_0, file_1/file_id_1, … pairs.
+   * Each original file is replaced in-place; total file count stays the same.
+   */
+  signFiles: (id: number, formData: FormData) =>
+    api.patch<Document>(`document/${id}/sign_files/`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }).then(r => r.data),
+
+  /** Upload additional file to document */
+  uploadFile: (id: number, formData: FormData) =>
+    api.post<DocumentFile>(`document/${id}/upload_file/`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }).then(r => r.data),
+
+  /** List all files for a document */
+  listFiles: (id: number, signal?: AbortSignal) =>
+    api.get<DocumentFile[]>(`document/${id}/files/`, { signal }).then(r => r.data),
+
+  /** Delete a file from a document */
+  deleteFile: (docId: number, fileId: number) =>
+    api.delete(`document/${docId}/delete_file/${fileId}/`),
 };
 
 // ── Signatory ─────────────────────────────────────────────────────────────────

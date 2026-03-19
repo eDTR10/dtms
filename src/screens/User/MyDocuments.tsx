@@ -81,21 +81,30 @@ const MyDocuments = () => {
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleDownload = async (doc: Document) => {
-    if (!doc.file_url) return;
+    const filesToDownload = doc.files && doc.files.length > 0
+      ? doc.files
+      : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
+    if (filesToDownload.length === 0) return;
     setDownloading(doc.id);
     try {
       const token = localStorage.getItem("auth_token");
-      const res = await fetch(doc.file_url, {
-        headers: token ? { Authorization: `Token ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-      a.download = `${doc.tracknumber} - ${doc.title}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      for (let i = 0; i < filesToDownload.length; i++) {
+        const f = filesToDownload[i];
+        if (!f.file_url) continue;
+        const res = await fetch(f.file_url, {
+          headers: token ? { Authorization: `Token ${token}` } : {},
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement("a");
+        a.href     = url;
+        const suffix = filesToDownload.length > 1 ? ` (${i + 1})` : "";
+        a.download = `${doc.tracknumber} - ${doc.title}${suffix}.pdf`;
+        a.click();
+        URL.revokeObjectURL(url);
+        if (i < filesToDownload.length - 1) await new Promise(r => setTimeout(r, 350));
+      }
     } catch (e) {
       console.error("Download failed", e);
     } finally {
@@ -372,10 +381,10 @@ const MyDocuments = () => {
         </div>
       ) : (
         <div className="bg-card border border-border rounded-xl overflow-hidden min-h-[530px] flex flex-col">
-          <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide md:grid-cols-[2fr_1fr_180px]">
+          <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_180px]">
             <span>Document</span>
-            <span className="md:hidden">Track No.</span>
-            <span className="md:hidden">Date</span>
+            <span className="slg:hidden">Track No.</span>
+            <span className="slg:hidden">Date</span>
             <span>Status</span>
             <span>Actions</span>
           </div>
@@ -386,7 +395,7 @@ const MyDocuments = () => {
             paginated.map(doc => (
               <div
                 key={doc.id}
-                className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors md:grid-cols-[2fr_1fr_180px]"
+                className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[2fr_1fr_180px]"
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
@@ -397,8 +406,8 @@ const MyDocuments = () => {
                     <p className="text-xs text-muted-foreground truncate">{doc.type}</p>
                   </div>
                 </div>
-                <p className="text-sm text-foreground font-mono md:hidden">{doc.tracknumber}</p>
-                <p className="text-sm text-muted-foreground md:hidden">{doc.datesubmitted}</p>
+                <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>
+                <p className="text-sm text-muted-foreground slg:hidden">{doc.datesubmitted}</p>
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground"}`}>
                   {statusLabel(doc, user?.id)}
                 </span>
@@ -410,12 +419,12 @@ const MyDocuments = () => {
                   >
                     <Eye className="w-4 h-4" />
                   </button>
-                  {doc.file_url && (
+                  {((doc.files && doc.files.length > 0) || doc.file_url) && (
                     <button
                       onClick={() => handleDownload(doc)}
                       disabled={downloading === doc.id}
                       className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-green-600 transition-colors disabled:opacity-50"
-                      title="Download PDF"
+                      title={doc.files && doc.files.length > 1 ? `Download ${doc.files.length} files` : "Download PDF"}
                     >
                       <Download className={`w-4 h-4 ${downloading === doc.id ? "animate-bounce" : ""}`} />
                     </button>

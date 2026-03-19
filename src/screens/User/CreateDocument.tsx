@@ -50,7 +50,7 @@ const CreateDocument = () => {
     message:  "",
     template: "",
   });
-  const [file,     setFile]     = useState<File | null>(null);
+  const [files,    setFiles]    = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
   const [error,    setError]    = useState<string | null>(null);
 
@@ -205,8 +205,8 @@ const CreateDocument = () => {
       setError("Please fill in all required fields.");
       return;
     }
-    if (!file) {
-      setError("Please attach a PDF file.");
+    if (files.length === 0) {
+      setError("Please attach at least one PDF file.");
       return;
     }
     setLoading(true);
@@ -220,9 +220,23 @@ const CreateDocument = () => {
       fd.append("position",  form.position);
       fd.append("message",   form.message);
       if (form.template) fd.append("template", form.template);
-      if (file) fd.append("file", file);
+      // Append only the first file to document.file for backward compatibility
+      if (files.length > 0) fd.append("file", files[0]);
 
       const doc = await documentApi.create(fd);
+
+      // Upload additional files if there are more than one
+      if (files.length > 1) {
+        for (let i = 1; i < files.length; i++) {
+          const fileFd = new FormData();
+          fileFd.append("file", files[i]);
+          try {
+            await documentApi.uploadFile(doc.id, fileFd);
+          } catch (err) {
+            console.error(`Failed to upload file ${i + 1}:`, err);
+          }
+        }
+      }
 
       // If signatories assigned → immediately route the document
       if (signatories.length > 0) {
@@ -354,15 +368,27 @@ const CreateDocument = () => {
                 <div className="flex flex-col gap-1.5">
                   <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     <Upload className="w-3.5 h-3.5 text-muted-foreground" />
-                    Attach PDF <span className="text-destructive">*</span>
+                    Attach PDFs <span className="text-destructive">*</span>
                   </label>
-                  {file ? (
-                    <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 px-4 py-3">
-                      <FileText className="w-4 h-4 text-primary shrink-0" />
-                      <span className="text-sm text-foreground truncate flex-1">{file.name}</span>
-                      <button type="button" onClick={() => setFile(null)}
-                        className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
-                        <X className="w-4 h-4" />
+                  {files.length > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {files.map((f, idx) => (
+                        <div key={idx} className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 px-4 py-3">
+                          <FileText className="w-4 h-4 text-primary shrink-0" />
+                          <span className="text-sm text-foreground truncate flex-1">{f.name}</span>
+                          <button type="button" onClick={() => setFiles(prev => prev.filter((_, i) => i !== idx))}
+                            className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                      <button type="button" onClick={() => {
+                        const input = document.querySelector('input[name="file-upload"]') as HTMLInputElement;
+                        input?.click();
+                      }}
+                        className="flex items-center justify-center gap-2 rounded-lg border border-border bg-accent/50 px-4 py-3 text-sm font-medium text-foreground hover:bg-accent transition">
+                        <Plus className="w-4 h-4" />
+                        Add more files
                       </button>
                     </div>
                   ) : (
@@ -378,8 +404,8 @@ const CreateDocument = () => {
                       onDrop={e => {
                         e.preventDefault();
                         setDragging(false);
-                        const dropped = e.dataTransfer.files?.[0];
-                        if (dropped?.type === "application/pdf") setFile(dropped);
+                        const dropped = Array.from(e.dataTransfer.files || []).filter(f => f.type === "application/pdf");
+                        if (dropped.length > 0) setFiles(prev => [...prev, ...dropped]);
                       }}
                     >
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition ${dragging ? "bg-primary/20" : "bg-accent group-hover:bg-primary/10"}`}>
@@ -387,12 +413,15 @@ const CreateDocument = () => {
                       </div>
                       <div className="text-center">
                         <p className="text-sm font-medium text-foreground">
-                          {dragging ? "Drop your PDF here" : "Drag & drop or click to upload"}
+                          {dragging ? "Drop your PDFs here" : "Drag & drop or click to upload"}
                         </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">PDF files only</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">PDF files only (multiple allowed)</p>
                       </div>
-                      <input type="file" accept=".pdf" className="hidden"
-                        onChange={e => setFile(e.target.files?.[0] ?? null)} />
+                      <input type="file" name="file-upload" accept=".pdf" multiple className="hidden"
+                        onChange={e => {
+                          const newFiles = Array.from(e.target.files || []).filter(f => f.type === "application/pdf");
+                          setFiles(prev => [...prev, ...newFiles]);
+                        }} />
                     </label>
                   )}
                 </div>
@@ -593,8 +622,8 @@ const CreateDocument = () => {
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Attachment</span>
-                    <span className="text-foreground font-medium">{file ? "1 file" : "None"}</span>
+                    <span className="text-muted-foreground">Attachments</span>
+                    <span className="text-foreground font-medium">{files.length} {files.length === 1 ? "file" : "files"}</span>
                   </div>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Signatories</span>

@@ -11,8 +11,9 @@ import {
   ChevronLeft, ChevronRight, PenLine, Printer
 } from "lucide-react";
 import UserLayout from "./UserLayout";
-import { documentApi, signatoryApi, Document, DocumentSignatory } from "../../services/api";
+import { documentApi, signatoryApi, Document, DocumentSignatory, DocumentFile } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
+import DocumentFileList from "../../components/DocumentFileList";
 
 /** Safely parse a datetime string from the API as UTC.
  *  If the string has no timezone suffix (no Z / +HH:MM) we append 'Z'
@@ -63,7 +64,20 @@ const SignDocument = () => {
   const [signing, setSigning]    = useState(false);
   const [done, setDone]          = useState(false);
   const [error, setError]        = useState<string | null>(null);
-  const [signedBlob, setSignedBlob] = useState<Blob | null>(null);
+  const [signedBlobs, setSignedBlobs] = useState<Array<{ blob: Blob; name: string }>>([]);
+  const [selectedFileUrl, setSelectedFileUrl] = useState<string | null>(null);
+
+  // ── Per-file stamp tracking ────────────────────────────────────────────────
+  type FileStampConfig = {
+    sigX: number; sigY: number; sigPage: number;
+    sigBoxW: number; sigBoxH: number;
+    placed: boolean; pdfW: number; pdfH: number;
+  };
+  const fileStampRef   = useRef<Record<number, FileStampConfig>>({});
+  const [fileStampsState, setFileStampsState] = useState<Record<number, FileStampConfig>>({});
+  const [activeDocFile, setActiveDocFile]     = useState<DocumentFile | null>(null);
+  // Per-file manual-sign uploads: key = DocumentFile.id
+  const [manualSignedFiles, setManualSignedFiles] = useState<Record<number, File>>({});
 
   // ----- UI tabs -----
   const [pdfVisible, setPdfVisible]       = useState(true);
@@ -246,7 +260,6 @@ const SignDocument = () => {
   const [declining,     setDeclining]     = useState(false);
   // ── Manual sign mode ─────────────────────────────────────────────────────────
   const [signMode,        setSignMode]        = useState<"digital" | "manual">("digital");
-  const [manualFile,      setManualFile]      = useState<File | null>(null);
   const [manualUploading, setManualUploading] = useState(false);
   const [manualDragging,  setManualDragging]  = useState(false);
 
@@ -308,7 +321,14 @@ const SignDocument = () => {
     if (!tracknumber) return;
     const controller = new AbortController();
     documentApi.getByTrack(tracknumber, controller.signal)
-      .then(d => { setDoc(d); if (d.file_url && pdfVisible) loadPdf(d.file_url); })
+      .then(d => {
+        setDoc(d);
+        const firstFile = d.files && d.files.length > 0 ? d.files[0] : null;
+        const fileToLoad = firstFile?.file_url || d.file_url || null;
+        setSelectedFileUrl(fileToLoad);
+        if (firstFile) setActiveDocFile(firstFile);
+        if (fileToLoad && pdfVisible) loadPdf(fileToLoad);
+      })
       .catch((err) => {
         if (err?.code === "ERR_CANCELED") return;
         const httpStatus = err?.response?.status;
@@ -338,15 +358,53 @@ const SignDocument = () => {
     const top  = Math.max(0, Math.min(rect.height - sh, py - sh / 2));
     if (isClick) {
       // x: from left edge (PDF left-origin)
-      setSigX(Math.max(0, Math.min(pdfPageWidth  - sigBoxW, px / sc - sigBoxW / 2)));
+      const newX = Math.max(0, Math.min(pdfPageWidth  - sigBoxW, px / sc - sigBoxW / 2));
       // y: PDF origin is bottom-left — flip from top-down overlay coords
-      setSigY(Math.max(0, Math.min(pdfPageHeight - sigBoxH, pdfPageHeight - py / sc - sigBoxH / 2)));
+      const newY = Math.max(0, Math.min(pdfPageHeight - sigBoxH, pdfPageHeight - py / sc - sigBoxH / 2));
+      setSigX(newX);
+      setSigY(newY);
       setStampPlaced(true);
       setPlacingMode(false);
       setHoverPx(null);
+      // Save stamp to per-file ref immediately on placement
+      if (activeDocFile) {
+        const cfg: FileStampConfig = {
+          sigX: newX, sigY: newY, sigPage, sigBoxW, sigBoxH,
+          placed: true, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+        };
+        fileStampRef.current[activeDocFile.id] = cfg;
+        setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
+      }
     } else {
       setHoverPx({ left, top });
     }
+  };
+
+  // --- Switch active document file (saves current stamp, restores saved stamp) ---
+  const switchToFile = (newFile: DocumentFile) => {
+    // Save the current stamp state before switching
+    if (activeDocFile) {
+      const cfg: FileStampConfig = {
+        sigX, sigY, sigPage, sigBoxW, sigBoxH,
+        placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+      };
+      fileStampRef.current[activeDocFile.id] = cfg;
+      setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
+    }
+    // Restore the new file's stamp (or reset to defaults)
+    const saved = fileStampRef.current[newFile.id];
+    if (saved) {
+      setSigX(saved.sigX); setSigY(saved.sigY); setSigPage(saved.sigPage);
+      setSigBoxW(saved.sigBoxW); setSigBoxH(saved.sigBoxH);
+      setStampPlaced(saved.placed);
+    } else {
+      setSigX(170); setSigY(720); setSigPage(1); setStampPlaced(false);
+    }
+    setPlacingMode(false); setHoverPx(null);
+    setActiveDocFile(newFile);
+    setSelectedFileUrl(newFile.file_url);
+    setPdfVisible(true);
+    loadPdf(newFile.file_url, { force: true });
   };
 
   // --- P12 file picker (also saves to localStorage) ---
@@ -442,85 +500,97 @@ const SignDocument = () => {
     if (!password) { setError("Please enter your P12 password."); return; }
     if (!PNPKI_URL) { setError("PNPKI server URL is not configured."); return; }
 
+    // Save current active file's stamp state before iterating
+    if (activeDocFile) {
+      const cfg: FileStampConfig = {
+        sigX, sigY, sigPage, sigBoxW, sigBoxH,
+        placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+      };
+      fileStampRef.current[activeDocFile.id] = cfg;
+      setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
+    }
+
+    // Determine which files have a placed stamp
+    const allDocFiles = doc.files || [];
+    const filesToSign = allDocFiles.filter(f => fileStampRef.current[f.id]?.placed);
+    if (filesToSign.length === 0) {
+      setError("Place your signature on at least one document file first.");
+      return;
+    }
+
     setSigning(true);
     setError(null);
+    const collected: Array<{ blob: Blob; name: string }> = [];
     try {
-      // ── Step 1: fetch the PDF from our server ──────────────────────────
-      let pdfBlob: Blob;
-      if (doc.file_url) {
-        const tok = localStorage.getItem("auth_token");
-        const res = await fetch(doc.file_url, {
+      // Build the composite stamp image once (shared across all files)
+      const compositeBlob = await buildStampCanvas();
+      const tok = localStorage.getItem("auth_token");
+
+      const uploadFd = new FormData();
+
+      for (let i = 0; i < filesToSign.length; i++) {
+        const docFile = filesToSign[i];
+        const cfg     = fileStampRef.current[docFile.id];
+
+        // ── Fetch this file's PDF ─────────────────────────────────────
+        const res = await fetch(docFile.file_url, {
           headers: tok ? { Authorization: `Token ${tok}` } : {},
         });
-        if (!res.ok) throw new Error(`Failed to fetch PDF: HTTP ${res.status}`);
-        pdfBlob = await res.blob();
-      } else {
-        setError("No PDF attached to this document. Ask the creator to upload one.");
-        setSigning(false);
-        return;
+        if (!res.ok) throw new Error(`Failed to fetch file ${i + 1}: HTTP ${res.status}`);
+        const pdfBlob = await res.blob();
+
+        // ── Call PNPKI to sign with this file's stamp coords ──────────
+        const xRatio = cfg.sigX / cfg.pdfW;
+        const wRatio = cfg.sigBoxW / cfg.pdfW;
+        const hRatio = cfg.sigBoxH / cfg.pdfH;
+        const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
+
+        const fd = new FormData();
+        fd.append("pdf_file",    pdfBlob,  `${doc.tracknumber}-${i}.pdf`);
+        fd.append("p12_file",    p12File,  p12File.name);
+        fd.append("password",    password);
+        fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
+        fd.append("sign_note",   sigPos || user?.position || "");
+        fd.append("page",        String(cfg.sigPage));
+        fd.append("sign_all_pages", "false");
+        fd.append("x_ratio", String(xRatio));
+        fd.append("y_ratio", String(yRatio));
+        fd.append("w_ratio", String(wRatio));
+        fd.append("h_ratio", String(hRatio));
+        if (compositeBlob)
+          fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
+        if (signImage)
+          fd.append("sign_image", signImage, "signature.png");
+
+        const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
+        if (!signRes.ok) {
+          const msg = await signRes.text();
+          throw new Error(msg || `PNPKI server error on file ${i + 1}.`);
+        }
+        const signedPdfBlob = await signRes.blob();
+        const signedName    = `${doc.tracknumber}-signed-${i + 1}.pdf`;
+        collected.push({ blob: signedPdfBlob, name: signedName });
+
+        // Add to the single batch upload
+        uploadFd.append(`file_${i}`,    signedPdfBlob, signedName);
+        uploadFd.append(`file_id_${i}`, String(docFile.id));
       }
 
-      // ── Step 2: call PNPKI microservice to sign ────────────────────────
-      // Build composite stamp PNG baked at designer positions
-      const compositeBlob = await buildStampCanvas();
+      setSignedBlobs(collected);
 
-      // Convert absolute-pt placement to ratios (server expects 0-1 fractions)
-      const xRatio = sigX / pdfPageWidth;
-      const wRatio = sigBoxW / pdfPageWidth;
-      const hRatio = sigBoxH / pdfPageHeight;
-      // sigY is from BOTTOM (PDF origin); y_ratio is from TOP (CSS origin)
-      const yRatio = (pdfPageHeight - sigY - sigBoxH) / pdfPageHeight;
-
-      const fd = new FormData();
-      fd.append("pdf_file",    pdfBlob,  `${doc.tracknumber}.pdf`);
-      fd.append("p12_file",    p12File,  p12File.name);
-      fd.append("password",    password);
-      fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
-      fd.append("sign_note",   sigPos || user?.position || "");
-      fd.append("page",        String(sigPage));
-      fd.append("sign_all_pages", "false");
-      // Ratio-based placement
-      fd.append("x_ratio", String(xRatio));
-      fd.append("y_ratio", String(yRatio));
-      fd.append("w_ratio", String(wRatio));
-      fd.append("h_ratio", String(hRatio));
-      // Composite design takes priority; raw image kept as fallback
-      if (compositeBlob)
-        fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
-      if (signImage)
-        fd.append("sign_image", signImage, "signature.png");
-
-      const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, {
-        method: "POST",
-        body: fd,
-      });
-      if (!signRes.ok) {
-        const msg = await signRes.text();
-        throw new Error(msg || "PNPKI server returned an error.");
-      }
-      const signedPdfBlob = await signRes.blob();
-      setSignedBlob(signedPdfBlob);
-
-      // ── Step 3: upload signed PDF back to Django ───────────────────────
-      const token = localStorage.getItem("auth_token");
-      const uploadFd = new FormData();
-      uploadFd.append("file", signedPdfBlob, `${doc.tracknumber}-signed.pdf`);
-      const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/upload_signed/`, {
-        method: "PATCH",
-        headers: token ? { Authorization: `Token ${token}` } : {},
-        body: uploadFd,
+      // ── Single request to replace all original files ─────────────────
+      const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
+        method:  "PATCH",
+        headers: tok ? { Authorization: `Token ${tok}` } : {},
+        body:    uploadFd,
       });
       if (!uploadRes.ok) {
         const txt = await uploadRes.text();
         throw new Error(`Upload failed: ${uploadRes.status} – ${txt}`);
       }
 
-      // upload_signed already updates the signatory record for pending signers,
-      // so we avoid an extra update request here.
       const updatedDoc = await uploadRes.json().catch(() => null);
-      if (updatedDoc) {
-        setDoc(updatedDoc);
-      }
+      if (updatedDoc) setDoc(updatedDoc);
       setDone(true);
     } catch (err: any) {
       setError(err?.message || "Signing failed. Please try again.");
@@ -530,56 +600,72 @@ const SignDocument = () => {
   };
 
   const handleDownload = () => {
-    if (!signedBlob || !doc) return;
-    const url = URL.createObjectURL(signedBlob);
-    const a   = document.createElement("a");
-    a.href     = url;
-    a.download = `${doc.tracknumber}-signed.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadOriginal = async () => {
-    if (!doc?.file_url) return;
-    try {
-      const tok = localStorage.getItem("auth_token");
-      const res = await fetch(doc.file_url, {
-        headers: tok ? { Authorization: `Token ${tok}` } : {},
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
+    if (!signedBlobs.length || !doc) return;
+    for (const { blob, name } of signedBlobs) {
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement("a");
       a.href     = url;
-      a.download = `${doc.tracknumber} - ${doc.title}.pdf`;
+      a.download = name;
       a.click();
       URL.revokeObjectURL(url);
+    }
+  };
+
+  /** Download all document files (originals / signed) for printing/archival */
+  const handleDownloadFiles = async () => {
+    if (!doc) return;
+    const filesToDownload = doc.files?.length
+      ? doc.files
+      : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
+    if (!filesToDownload.length) return;
+    try {
+      const tok = localStorage.getItem("auth_token");
+      for (let i = 0; i < filesToDownload.length; i++) {
+        const f   = filesToDownload[i];
+        const url = f.file_url;
+        if (!url) continue;
+        const res = await fetch(url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const a    = document.createElement("a");
+        a.href     = URL.createObjectURL(blob);
+        a.download = filesToDownload.length > 1
+          ? `${doc.tracknumber} - ${doc.title} (${i + 1}).pdf`
+          : `${doc.tracknumber} - ${doc.title}.pdf`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        // Brief pause between multiple downloads so the browser doesn't block them
+        if (i < filesToDownload.length - 1) await new Promise(r => setTimeout(r, 350));
+      }
     } catch (e: any) {
       setError(e?.message || "Failed to download PDF.");
     }
   };
 
   const handleManualSign = async () => {
-    if (!doc || !manualFile) return;
+    if (!doc) return;
+    const entries = Object.entries(manualSignedFiles);
+    if (entries.length === 0) return;
     setManualUploading(true);
     setError(null);
     try {
-      const token = localStorage.getItem("auth_token");
+      const token  = localStorage.getItem("auth_token");
       const uploadFd = new FormData();
-      uploadFd.append("file", manualFile, manualFile.name);
-      const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/upload_signed/`, {
-        method: "PATCH",
+      entries.forEach(([fileId, file], i) => {
+        uploadFd.append(`file_${i}`,    file,    file.name);
+        uploadFd.append(`file_id_${i}`, fileId);
+      });
+      const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
+        method:  "PATCH",
         headers: token ? { Authorization: `Token ${token}` } : {},
-        body: uploadFd,
+        body:    uploadFd,
       });
       if (!uploadRes.ok) {
         const txt = await uploadRes.text();
         throw new Error(`Upload failed: ${uploadRes.status} – ${txt}`);
       }
       const updatedDoc = await uploadRes.json().catch(() => null);
-      if (updatedDoc) {
-        setDoc(updatedDoc);
-      }
+      if (updatedDoc) setDoc(updatedDoc);
       setDone(true);
     } catch (err: any) {
       setError(err?.message || "Upload failed. Please try again.");
@@ -666,9 +752,8 @@ const SignDocument = () => {
                     setPdfVisible(true);
                     setPlacingMode(true);
                     setHoverPx(null);
-                    if (doc?.file_url) {
-                      void loadPdf(doc.file_url, { force: true });
-                    }
+                    const urlToLoad = activeDocFile?.file_url || doc?.file_url;
+                    if (urlToLoad) void loadPdf(urlToLoad, { force: true });
                   }}
                   className="px-5 py-2.5 rounded-lg border border-border text-sm text-foreground hover:bg-accent transition"
                 >
@@ -684,14 +769,48 @@ const SignDocument = () => {
         )}
 
         {!done && (
-          <div className="grid rever  grid-cols-[60vw_1fr]  gap-5 items-start sm:grid-cols-1">
+          <div className="grid grid-cols-[1fr_360px] gap-5 items-start lg:grid-cols-1">
 
                 {/* ══════════════════════════════════════════
                 RIGHT COLUMN — PDF viewer
                 ══════════════════════════════════════════ */}
-            <div className="min-w-0 sticky top-4">
-              {doc?.file_url ? (
+            <div className="min-w-0 sticky top-4 lg:static">
+              {doc && selectedFileUrl ? (
                 <div className="bg-card border border-border rounded-xl overflow-hidden flex flex-col ">
+
+                  {/* File tabs — shown when document has multiple files */}
+                  {doc.files && doc.files.length > 1 && (
+                    <div className="flex items-center gap-1.5 px-4 pt-3 pb-2 flex-wrap border-b border-border bg-muted/20">
+                      <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mr-1">Files:</span>
+                      {doc.files.map((f, idx) => {
+                        const cfg      = fileStampsState[f.id];
+                        const isActive = activeDocFile?.id === f.id;
+                        return (
+                          <button
+                            key={f.id}
+                            onClick={() => switchToFile(f)}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition ${
+                              isActive
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "bg-accent text-foreground hover:bg-accent/70"
+                            }`}
+                          >
+                            {cfg?.placed
+                              ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
+                              : <FileText className="w-3 h-3 shrink-0 opacity-60" />}
+                            File {idx + 1}
+                          
+                          </button>
+                        );
+                      })}
+                      {canSign && (
+                        <span className="ml-auto text-[10px] text-muted-foreground">
+                          {Object.values(fileStampsState).filter(c => c.placed).length}/{doc.files.length} stamped
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {/* Header bar */}
                   <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-muted/30">
                     <Eye className="w-4 h-4 text-primary" />
@@ -737,7 +856,7 @@ const SignDocument = () => {
                         onClick={() => {
                           const next = !pdfVisible;
                           setPdfVisible(next);
-                          if (next && doc.file_url) loadPdf(doc.file_url);
+                          if (next && selectedFileUrl) loadPdf(selectedFileUrl);
                         }}
                         className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition"
                         title={pdfVisible ? "Collapse" : "Expand"}>
@@ -1023,6 +1142,39 @@ const SignDocument = () => {
                 </div>
               )}
 
+              {/* ── Document files ──────────────────────────────── */}
+              {doc && (
+                <div className="bg-card border border-border rounded-xl px-5 py-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Files</span>
+                    {doc.files && doc.files.length > 0 && (
+                      <button
+                        onClick={handleDownloadFiles}
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        title={doc.files.length > 1 ? `Download all ${doc.files.length} files` : "Download PDF"}>
+                        <Download className="w-3.5 h-3.5" />
+                        {doc.files.length > 1 ? `Download all (${doc.files.length})` : "Download"}
+                      </button>
+                    )}
+                  </div>
+                  <DocumentFileList 
+                    document={doc} 
+                    onFileSelect={(fileUrl) => {
+                      // Sync the file tabs above the viewer
+                      const matched = doc.files?.find(f => f.file_url === fileUrl);
+                      if (matched) {
+                        switchToFile(matched);
+                      } else {
+                        setSelectedFileUrl(fileUrl);
+                        setPdfVisible(true);
+                        loadPdf(fileUrl, { force: true });
+                      }
+                    }}
+                    selectedFileUrl={selectedFileUrl}
+                  />
+                </div>
+              )}
+
               {/* ── Already signed banner ───────────────────────── */}
               {mySig && mySig.status === "signed" && !isOwner && (
                 <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-5 py-4 flex items-center gap-3">
@@ -1062,60 +1214,78 @@ const SignDocument = () => {
                   {/* ── Manual sign panel ── */}
                   {signMode === "manual" && (
                     <div className="flex flex-col gap-4">
-                      {/* Step 1 — download */}
+                      {/* Step 1 — download all files */}
                       <div className="bg-card border border-border rounded-xl p-5 flex flex-col gap-3">
                         <div className="flex items-center gap-2">
                           <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">1</span>
-                          <p className="text-sm font-medium text-foreground">Print the document</p>
+                          <p className="text-sm font-medium text-foreground">Print the document{doc && doc.files && doc.files.length > 1 ? "s" : ""}</p>
                         </div>
                         <p className="text-xs text-muted-foreground pl-8">
-                          Download the original PDF, print it, sign it by hand, then scan or photograph it.
+                          Download {doc && doc.files && doc.files.length > 1 ? `all ${doc.files.length} files` : "the PDF"}, print, sign by hand, then scan each one.
                         </p>
                         <button
-                          onClick={handleDownloadOriginal}
+                          onClick={handleDownloadFiles}
                           className="ml-8 flex items-center gap-2 w-fit px-4 py-2 rounded-lg border border-border bg-background text-sm text-foreground hover:bg-accent transition">
                           <Printer className="w-4 h-4" /> Download for Printing
+                          {doc && doc.files && doc.files.length > 1 && (
+                            <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">{doc.files.length} files</span>
+                          )}
                         </button>
                       </div>
 
-                      {/* Step 2 — upload scan */}
+                      {/* Step 2 — upload signed scans (one per file) */}
                       <div className="bg-card border border-border rounded-xl p-5 flex flex-col gap-3">
                         <div className="flex items-center gap-2">
                           <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">2</span>
-                          <p className="text-sm font-medium text-foreground">Upload the signed scan</p>
+                          <p className="text-sm font-medium text-foreground">Upload the signed scan{doc && doc.files && doc.files.length > 1 ? "s" : ""}</p>
                         </div>
-                        <label
-                          onDragOver={e => { e.preventDefault(); setManualDragging(true); }}
-                          onDragEnter={e => { e.preventDefault(); setManualDragging(true); }}
-                          onDragLeave={() => setManualDragging(false)}
-                          onDrop={e => {
-                            e.preventDefault(); setManualDragging(false);
-                            const f = e.dataTransfer.files[0];
-                            if (f && f.type === "application/pdf") setManualFile(f);
-                          }}
-                          className={`ml-8 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-6 cursor-pointer transition ${
-                            manualDragging
-                              ? "border-primary bg-primary/5"
-                              : manualFile
-                              ? "border-green-500/50 bg-green-500/5"
-                              : "border-border bg-background hover:border-primary/40"
-                          }`}>
-                          {manualFile ? (
-                            <>
-                              <CheckCircle2 className="w-6 h-6 text-green-500" />
-                              <p className="text-sm font-medium text-foreground text-center truncate max-w-[220px]">{manualFile.name}</p>
-                              <p className="text-xs text-muted-foreground">{(manualFile.size / 1024).toFixed(0)} KB — click to replace</p>
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="w-6 h-6 text-muted-foreground" />
-                              <p className="text-sm text-muted-foreground">Drop PDF here or <span className="text-primary font-medium">click to browse</span></p>
-                              <p className="text-xs text-muted-foreground">Scanned or photographed copy (PDF only)</p>
-                            </>
-                          )}
-                          <input type="file" accept="application/pdf" className="hidden"
-                            onChange={e => setManualFile(e.target.files?.[0] ?? null)} />
-                        </label>
+                        {/* One upload zone per document file */}
+                        {(doc?.files && doc.files.length > 0 ? doc.files : []).map((docFile, idx) => {
+                          const uploaded = manualSignedFiles[docFile.id];
+                          return (
+                            <div key={docFile.id} className="ml-8 flex flex-col gap-1">
+                              {doc!.files!.length > 1 && (
+                                <span className="text-xs font-medium text-muted-foreground">File {idx + 1}</span>
+                              )}
+                              <label
+                                onDragOver={e => { e.preventDefault(); setManualDragging(true); }}
+                                onDragEnter={e => { e.preventDefault(); setManualDragging(true); }}
+                                onDragLeave={() => setManualDragging(false)}
+                                onDrop={e => {
+                                  e.preventDefault(); setManualDragging(false);
+                                  const f = e.dataTransfer.files[0];
+                                  if (f && f.type === "application/pdf")
+                                    setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
+                                }}
+                                className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-5 cursor-pointer transition ${
+                                  manualDragging
+                                    ? "border-primary bg-primary/5"
+                                    : uploaded
+                                    ? "border-green-500/50 bg-green-500/5"
+                                    : "border-border bg-background hover:border-primary/40"
+                                }`}>
+                                {uploaded ? (
+                                  <>
+                                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                                    <p className="text-sm font-medium text-foreground text-center truncate max-w-[220px]">{uploaded.name}</p>
+                                    <p className="text-xs text-muted-foreground">{(uploaded.size / 1024).toFixed(0)} KB — click to replace</p>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="w-5 h-5 text-muted-foreground" />
+                                    <p className="text-sm text-muted-foreground">Drop PDF here or <span className="text-primary font-medium">click to browse</span></p>
+                                    <p className="text-xs text-muted-foreground">Scanned / photographed copy (PDF only)</p>
+                                  </>
+                                )}
+                                <input type="file" accept="application/pdf" className="hidden"
+                                  onChange={e => {
+                                    const f = e.target.files?.[0];
+                                    if (f) setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
+                                  }} />
+                              </label>
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {/* Remarks */}
@@ -1151,17 +1321,17 @@ const SignDocument = () => {
                         )}
                         <button
                           onClick={handleManualSign}
-                          disabled={manualUploading || !manualFile}
-                          title={!manualFile ? "Upload your scanned signed copy first" : undefined}
+                          disabled={manualUploading || Object.keys(manualSignedFiles).length === 0}
+                          title={Object.keys(manualSignedFiles).length === 0 ? "Upload at least one signed scan first" : undefined}
                           className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">
                           {manualUploading
                             ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</>
-                            : <><PenLine className="w-4 h-4" /> Submit Signed Copy</>}
+                            : <><PenLine className="w-4 h-4" /> Submit Signed {Object.keys(manualSignedFiles).length > 1 ? `(${Object.keys(manualSignedFiles).length} files)` : "Copy"}</>}
                         </button>
                       </div>
-                      {!manualFile && (
+                      {Object.keys(manualSignedFiles).length === 0 && (
                         <p className="text-[11px] text-amber-600 dark:text-amber-400 text-center">
-                          ⚠ Upload your scanned signed copy (PDF) before submitting.
+                          ⚠ Upload your scanned signed {doc && doc.files && doc.files.length > 1 ? "copies" : "copy"} (PDF) before submitting.
                         </p>
                       )}
                     </div>
@@ -1331,15 +1501,15 @@ const SignDocument = () => {
                         <XCircle className="w-4 h-4" /> Decline
                       </button>
                     )}
-                    <button onClick={handleSign} disabled={signing || !stampPlaced}
-                      title={!stampPlaced ? "Place your signature on the document first" : undefined}
+                  <button onClick={handleSign} disabled={signing || Object.values(fileStampsState).every(c => !c.placed)}
+                      title={Object.values(fileStampsState).every(c => !c.placed) ? "Place your signature on at least one document file first" : undefined}
                       className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">
                       {signing
                         ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing document...</>
                         : <><Key className="w-4 h-4" /> Sign with PNPKI</>}
                     </button>
                   </div>
-                  {!stampPlaced && (
+                  {Object.values(fileStampsState).every(c => !c.placed) && (
                     <p className="text-[11px] text-amber-600 dark:text-amber-400 text-center">
                       ⚠ Click <strong>Place Signature</strong> on the document viewer to position your stamp before signing.
                     </p>
