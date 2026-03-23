@@ -14,10 +14,8 @@ import UserLayout from "./UserLayout";
 import { documentApi, signatoryApi, Document, DocumentSignatory, DocumentFile } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
 import DocumentFileList from "../../components/DocumentFileList";
-
-/** Safely parse a datetime string from the API as UTC.
- *  If the string has no timezone suffix (no Z / +HH:MM) we append 'Z'
- *  so JavaScript doesn't misinterpret it as local time. */
+import SigningOverlay from "@/components/ui/scannerLoader";
+/** Safely parse a datetime string from the API as UTC. */
 const parseUTC = (str: string): Date =>
   new Date(/[Zz]$|[+-]\d{2}:?\d{2}$/.test(str) ? str : str + "Z");
 
@@ -28,7 +26,7 @@ const fmtSignedAt = (str: string) =>
     hour: "2-digit", minute: "2-digit",
   });
 
-// A4 fallback dimensions — actual values come from the PDF page
+// A4 fallback dimensions
 const PDF_W = 595, PDF_H = 842;
 
 /** Convert base64 string (no data-URL prefix) into a File */
@@ -76,7 +74,6 @@ const SignDocument = () => {
   const fileStampRef   = useRef<Record<number, FileStampConfig>>({});
   const [fileStampsState, setFileStampsState] = useState<Record<number, FileStampConfig>>({});
   const [activeDocFile, setActiveDocFile]     = useState<DocumentFile | null>(null);
-  // Per-file manual-sign uploads: key = DocumentFile.id
   const [manualSignedFiles, setManualSignedFiles] = useState<Record<number, File>>({});
 
   // ----- UI tabs -----
@@ -96,12 +93,10 @@ const SignDocument = () => {
   const canvasRef          = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
   const renderTaskRef      = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [pdfDoc, setPdfDoc]               = useState<any>(null);
   const [pdfBlobUrl, setPdfBlobUrl]       = useState<string | null>(null);
   const [pdfLoading, setPdfLoading]       = useState(false);
   const [pdfError, setPdfError]           = useState<string | null>(null);
-  // renderScale = CSS px per 1 PDF user-space point (exact, from canvas rendering)
   const [renderScale, setRenderScale]     = useState(1);
   const [pdfPageWidth,  setPdfPageWidth]  = useState(PDF_W);
   const [pdfPageHeight, setPdfPageHeight] = useState(PDF_H);
@@ -109,10 +104,9 @@ const SignDocument = () => {
   /** Render a single page to the canvas at container-fill scale */
   const renderPage = useCallback(async (doc: any, pageNum: number) => {
     if (!canvasRef.current || !viewerContainerRef.current) return;
-    // Cancel any in-progress render before starting a new one
     if (renderTaskRef.current) {
       renderTaskRef.current.cancel();
-      try { await renderTaskRef.current.promise; } catch (_) { /* RenderingCancelledException — expected */ }
+      try { await renderTaskRef.current.promise; } catch (_) { /* RenderingCancelledException */ }
       renderTaskRef.current = null;
     }
     const page  = await doc.getPage(pageNum);
@@ -141,7 +135,7 @@ const SignDocument = () => {
 
   const loadPdf = useCallback(async (fileUrl: string, opts?: { force?: boolean }) => {
     const force = !!opts?.force;
-    if (pdfBlobUrl && !force) return; // already loaded
+    if (pdfBlobUrl && !force) return;
     setPdfLoading(true);
     setPdfError(null);
     try {
@@ -159,11 +153,9 @@ const SignDocument = () => {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const arrayBuffer = await res.arrayBuffer();
-      // Keep blob URL for the "Place Signature" button trigger
       const blob = new Blob([arrayBuffer], { type: "application/pdf" });
       const url  = URL.createObjectURL(blob);
       setPdfBlobUrl(url);
-      // Pass ArrayBuffer directly — avoids "response (0)" error when worker fetches blob URL
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
       const doc = await loadingTask.promise;
       setPdfDoc(doc);
@@ -175,7 +167,6 @@ const SignDocument = () => {
     }
   }, [pdfBlobUrl, renderPage]);
 
-  // Revoke blob URL on unmount
   useEffect(() => {
     return () => { if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl); };
   }, [pdfBlobUrl]);
@@ -195,15 +186,16 @@ const SignDocument = () => {
   const [sigImgLeft, setSigImgLeft] = useState(50);
   const [sigTxtTop,  setSigTxtTop]  = useState(55);
   const [sigTxtLeft, setSigTxtLeft] = useState(50);
+  // ── NEW: "Digitally Signed by:" label from SignatureSettings ──
+  const [showSignedBy, setShowSignedBy] = useState(false);
 
   // ----- Signature placement (PDF pts, origin top-left) -----
-  const [sigX, setSigX]     = useState(170);   // pts from left
-  const [sigY, setSigY]     = useState(720);   // pts from top
-  const [sigBoxW, setSigBoxW] = useState(Number(localStorage.getItem("sig_stamp_width")) || 220); // pts
-  const [sigBoxH, setSigBoxH] = useState(Number(localStorage.getItem("sig_stamp_height")) || 80); // pts
+  const [sigX, setSigX]     = useState(170);
+  const [sigY, setSigY]     = useState(720);
+  const [sigBoxW, setSigBoxW] = useState(Number(localStorage.getItem("sig_stamp_width")) || 220);
+  const [sigBoxH, setSigBoxH] = useState(Number(localStorage.getItem("sig_stamp_height")) || 80);
   const [sigPage, setSigPage] = useState(1);
 
-  // Re-render canvas when user changes page
   useEffect(() => {
     if (pdfDoc) renderPage(pdfDoc, sigPage);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,7 +220,6 @@ const SignDocument = () => {
         const newH = clamp(origH + dh, 20,  pdfPageHeight);
         setSigBoxW(Math.round(newW));
         setSigBoxH(Math.round(newH));
-        // expand downward: bottom edge moves down → sigY decreases
         setSigY(clamp(origY - dh, 0, pdfPageHeight - 20));
       }
     };
@@ -239,15 +230,13 @@ const SignDocument = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderScale, pdfPageWidth, pdfPageHeight, sigBoxW, sigBoxH]);
 
-  // Keep the stamp box anchored within the visible page when size changes.
   useEffect(() => {
     setSigX(prev => Math.max(0, Math.min(prev, pdfPageWidth - sigBoxW)));
     setSigY(prev => Math.max(0, Math.min(prev, pdfPageHeight - sigBoxH)));
   }, [pdfPageWidth, pdfPageHeight, sigBoxW, sigBoxH]);
-  // Derived
+
   const mySig: DocumentSignatory | undefined = doc?.signatories.find(s => s.user_id === user?.id);
   const isOwner  = doc?.userID === user?.id;
-  // Allow owner and assigned signatories (pending or already signed) to sign again.
   const canSign  = !!doc && (
     isOwner || mySig?.status === "pending" || mySig?.status === "signed"
   );
@@ -255,10 +244,8 @@ const SignDocument = () => {
   // ── Decline state ───────────────────────────────────────────────────────────
   const [declineOpen,   setDeclineOpen]   = useState(false);
   const [declineReason, setDeclineReason] = useState("");
-  // ── Sign remarks ─────────────────────────────────────────────────────────────
-  const [signRemarks, setSignRemarks] = useState("");
+  const [signRemarks, setSignRemarks]     = useState("");
   const [declining,     setDeclining]     = useState(false);
-  // ── Manual sign mode ─────────────────────────────────────────────────────────
   const [signMode,        setSignMode]        = useState<"digital" | "manual">("digital");
   const [manualUploading, setManualUploading] = useState(false);
   const [manualDragging,  setManualDragging]  = useState(false);
@@ -269,7 +256,6 @@ const SignDocument = () => {
     try {
       await signatoryApi.update(mySig.id, { status: "rejected", remarks: declineReason });
       setDeclineOpen(false);
-      // Refresh doc
       const updated = await documentApi.getByTrack(doc!.tracknumber);
       setDoc(updated);
     } catch (e: any) {
@@ -279,7 +265,6 @@ const SignDocument = () => {
       setDeclining(false);
     }
   };
-
 
   // Load all sig settings from localStorage on mount
   useEffect(() => {
@@ -294,8 +279,9 @@ const SignDocument = () => {
     setSigImgLeft(Number(localStorage.getItem("sig_img_left"))  || 50);
     setSigTxtTop(Number(localStorage.getItem("sig_txt_top"))    || 55);
     setSigTxtLeft(Number(localStorage.getItem("sig_txt_left"))  || 50);
+    // ── NEW: load showSignedBy ──
+    setShowSignedBy(localStorage.getItem("sig_show_signed_by") === "true");
 
-    // Restore P12 from localStorage
     const p12b64  = localStorage.getItem("sig_p12_data");
     const p12name = localStorage.getItem("sig_p12_name") || "certificate.p12";
     if (p12b64) {
@@ -305,7 +291,6 @@ const SignDocument = () => {
       } catch {}
     }
 
-    // Restore signature image from localStorage
     const imgData = localStorage.getItem("sig_image_data");
     if (imgData) {
       setSignImagePreview(imgData);
@@ -345,28 +330,23 @@ const SignDocument = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tracknumber]);
 
-  // --- Live placement overlay handlers ---
-  // --- Overlay event handler: uses exact renderScale from pdfjs canvas rendering ---
   const handleOverlayEvent = (e: React.MouseEvent<HTMLDivElement>, isClick: boolean) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const sc   = renderScale;               // exact scale from canvas render, not estimated
+    const sc   = renderScale;
     const px   = e.clientX - rect.left;
     const py   = e.clientY - rect.top;
-    const sw   = sigBoxW * sc;              // stamp width in CSS px
-    const sh   = sigBoxH * sc;              // stamp height in CSS px
+    const sw   = sigBoxW * sc;
+    const sh   = sigBoxH * sc;
     const left = Math.max(0, Math.min(rect.width  - sw, px - sw / 2));
     const top  = Math.max(0, Math.min(rect.height - sh, py - sh / 2));
     if (isClick) {
-      // x: from left edge (PDF left-origin)
       const newX = Math.max(0, Math.min(pdfPageWidth  - sigBoxW, px / sc - sigBoxW / 2));
-      // y: PDF origin is bottom-left — flip from top-down overlay coords
       const newY = Math.max(0, Math.min(pdfPageHeight - sigBoxH, pdfPageHeight - py / sc - sigBoxH / 2));
       setSigX(newX);
       setSigY(newY);
       setStampPlaced(true);
       setPlacingMode(false);
       setHoverPx(null);
-      // Save stamp to per-file ref immediately on placement
       if (activeDocFile) {
         const cfg: FileStampConfig = {
           sigX: newX, sigY: newY, sigPage, sigBoxW, sigBoxH,
@@ -380,9 +360,7 @@ const SignDocument = () => {
     }
   };
 
-  // --- Switch active document file (saves current stamp, restores saved stamp) ---
   const switchToFile = (newFile: DocumentFile) => {
-    // Save the current stamp state before switching
     if (activeDocFile) {
       const cfg: FileStampConfig = {
         sigX, sigY, sigPage, sigBoxW, sigBoxH,
@@ -391,7 +369,6 @@ const SignDocument = () => {
       fileStampRef.current[activeDocFile.id] = cfg;
       setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
     }
-    // Restore the new file's stamp (or reset to defaults)
     const saved = fileStampRef.current[newFile.id];
     if (saved) {
       setSigX(saved.sigX); setSigY(saved.sigY); setSigPage(saved.sigPage);
@@ -407,7 +384,6 @@ const SignDocument = () => {
     loadPdf(newFile.file_url, { force: true });
   };
 
-  // --- P12 file picker (also saves to localStorage) ---
   const handleP12Change = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -420,7 +396,6 @@ const SignDocument = () => {
     } catch {}
   };
 
-  // --- Signature image picker (also saves to localStorage) ---
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -436,63 +411,70 @@ const SignDocument = () => {
 
   /**
    * Build a composite PNG that matches the Stamp Designer preview exactly.
-   * Canvas proportions are ratio-based (W=1000, H derived from w/h ratio)
-   * so the server receives a correctly proportioned image regardless of pts.
-   * Sent as `sign_design`; the server uses it directly as the stamp visual.
+   * Updated to support LEFT-aligned text and the optional "Digitally Signed by:" label.
    */
-  const buildStampCanvas = (): Promise<Blob | null> =>
-    new Promise(resolve => {
-      const W = 1000;
-      // H must match the stamp box aspect ratio directly.
-      // Using hRatio/wRatio introduces a page-aspect skew (595≠842) that
-      // causes the server to stretch/crop the image. Use sigBoxH/sigBoxW.
-      const H = Math.max(160, Math.round(W * (sigBoxH / sigBoxW)));
-      const canvas = document.createElement("canvas");
-      canvas.width  = W;
-      canvas.height = H;
-      const ctx = canvas.getContext("2d")!;
-      ctx.clearRect(0, 0, W, H);
+ const buildStampCanvas = (): Promise<Blob | null> =>
+  new Promise(resolve => {
+    const W = 1000;
+    const H = Math.max(160, Math.round(W * (sigBoxH / sigBoxW)));
+    const canvas = document.createElement("canvas");
+    canvas.width  = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, W, H);
 
-      // Font size: textSize is in PDF pts; scale to canvas pixels
-      const ptToPx  = H / sigBoxH;
-      const nameFs  = textSize * ptToPx;
-      const posFs   = Math.max(6, (textSize - 2)) * ptToPx;
+    const ptToPx     = H / sigBoxH;
+    const nameFs     = textSize * ptToPx;
+    const posFs      = Math.max(6, (textSize - 2)) * ptToPx;
+    const signedByFs = Math.max(5, (textSize - 3)) * ptToPx;
 
-      const drawText = () => {
-        const tx = (sigTxtLeft / 100) * W;
-        const ty = (sigTxtTop  / 100) * H;
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "top";
-        if (displayName) {
-          ctx.font      = `bold ${nameFs}px sans-serif`;
-          ctx.fillStyle = "#1e3a5f";
-          ctx.fillText(displayName, tx, ty);
-        }
-        if (sigPos) {
-          ctx.font      = `${posFs}px sans-serif`;
-          ctx.fillStyle = "#2563EB";
-          ctx.fillText(sigPos, tx, ty + nameFs * 1.35);
-        }
-        canvas.toBlob(b => resolve(b), "image/png");
-      };
+    const drawText = () => {
+      // ── Match the HTML preview: text left-edge starts at sigTxtLeft% of W ──
+      const xPos = (sigTxtLeft / 100) * W;
+      const ty   = (sigTxtTop  / 100) * H;
 
-      if (signImagePreview) {
-        const img = new Image();
-        img.onload = () => {
-          // imgWidth is in "designer px" (designer box = 330 px wide = sigBoxW pts)
-          const imgPxOnCanvas = (imgWidth / sigBoxW) * W;
-          const ih = img.naturalHeight * (imgPxOnCanvas / Math.max(1, img.naturalWidth));
-          const ix = (sigImgLeft / 100) * W - imgPxOnCanvas / 2;
-          const iy = (sigImgTop  / 100) * H;
-          ctx.drawImage(img, ix, iy, imgPxOnCanvas, ih);
-          drawText();
-        };
-        img.onerror = drawText;
-        img.src = signImagePreview;
-      } else {
-        drawText();
+      ctx.textAlign    = "left";
+      ctx.textBaseline = "top";
+
+      let nameOffsetY = ty;
+
+      if (showSignedBy) {
+        ctx.font      = `${signedByFs}px sans-serif`;
+        ctx.fillStyle = "#64748b";
+        ctx.fillText("Digitally Signed by:", xPos, ty);
+        nameOffsetY = ty + signedByFs * 1.4;
       }
-    });
+
+      if (displayName) {
+        ctx.font      = `bold ${nameFs}px sans-serif`;
+        ctx.fillStyle = "#1e3a5f";
+        ctx.fillText(displayName, xPos, nameOffsetY);
+      }
+      if (sigPos) {
+        ctx.font      = `${posFs}px sans-serif`;
+        ctx.fillStyle = "#2563EB";
+        ctx.fillText(sigPos, xPos, nameOffsetY + nameFs * 1.35);
+      }
+      canvas.toBlob(b => resolve(b), "image/png");
+    };
+
+    if (signImagePreview) {
+      const img = new Image();
+      img.onload = () => {
+        // Image is centered on sigImgLeft% — matches HTML translate(-50%, 0)
+        const imgPxOnCanvas = (imgWidth / sigBoxW) * W;
+        const ih = img.naturalHeight * (imgPxOnCanvas / Math.max(1, img.naturalWidth));
+        const ix = (sigImgLeft / 100) * W - imgPxOnCanvas / 2;
+        const iy = (sigImgTop  / 100) * H;
+        ctx.drawImage(img, ix, iy, imgPxOnCanvas, ih);
+        drawText();
+      };
+      img.onerror = drawText;
+      img.src = signImagePreview;
+    } else {
+      drawText();
+    }
+  });
 
   const handleSign = async () => {
     if (!doc) return;
@@ -500,7 +482,6 @@ const SignDocument = () => {
     if (!password) { setError("Please enter your P12 password."); return; }
     if (!PNPKI_URL) { setError("PNPKI server URL is not configured."); return; }
 
-    // Save current active file's stamp state before iterating
     if (activeDocFile) {
       const cfg: FileStampConfig = {
         sigX, sigY, sigPage, sigBoxW, sigBoxH,
@@ -510,7 +491,6 @@ const SignDocument = () => {
       setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
     }
 
-    // Determine which files have a placed stamp
     const allDocFiles = doc.files || [];
     const filesToSign = allDocFiles.filter(f => fileStampRef.current[f.id]?.placed);
     if (filesToSign.length === 0) {
@@ -522,24 +502,20 @@ const SignDocument = () => {
     setError(null);
     const collected: Array<{ blob: Blob; name: string }> = [];
     try {
-      // Build the composite stamp image once (shared across all files)
       const compositeBlob = await buildStampCanvas();
       const tok = localStorage.getItem("auth_token");
-
       const uploadFd = new FormData();
 
       for (let i = 0; i < filesToSign.length; i++) {
         const docFile = filesToSign[i];
         const cfg     = fileStampRef.current[docFile.id];
 
-        // ── Fetch this file's PDF ─────────────────────────────────────
         const res = await fetch(docFile.file_url, {
           headers: tok ? { Authorization: `Token ${tok}` } : {},
         });
         if (!res.ok) throw new Error(`Failed to fetch file ${i + 1}: HTTP ${res.status}`);
         const pdfBlob = await res.blob();
 
-        // ── Call PNPKI to sign with this file's stamp coords ──────────
         const xRatio = cfg.sigX / cfg.pdfW;
         const wRatio = cfg.sigBoxW / cfg.pdfW;
         const hRatio = cfg.sigBoxH / cfg.pdfH;
@@ -571,14 +547,12 @@ const SignDocument = () => {
         const signedName    = `${doc.tracknumber}-signed-${i + 1}.pdf`;
         collected.push({ blob: signedPdfBlob, name: signedName });
 
-        // Add to the single batch upload
         uploadFd.append(`file_${i}`,    signedPdfBlob, signedName);
         uploadFd.append(`file_id_${i}`, String(docFile.id));
       }
 
       setSignedBlobs(collected);
 
-      // ── Single request to replace all original files ─────────────────
       const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
         method:  "PATCH",
         headers: tok ? { Authorization: `Token ${tok}` } : {},
@@ -591,6 +565,12 @@ const SignDocument = () => {
 
       const updatedDoc = await uploadRes.json().catch(() => null);
       if (updatedDoc) setDoc(updatedDoc);
+
+      if (mySig) {
+        try {
+          await signatoryApi.update(mySig.id, { status: "signed", remarks: signRemarks });
+        } catch (e) {}
+      }
       setDone(true);
     } catch (err: any) {
       setError(err?.message || "Signing failed. Please try again.");
@@ -611,7 +591,6 @@ const SignDocument = () => {
     }
   };
 
-  /** Download all document files (originals / signed) for printing/archival */
   const handleDownloadFiles = async () => {
     if (!doc) return;
     const filesToDownload = doc.files?.length
@@ -634,7 +613,6 @@ const SignDocument = () => {
           : `${doc.tracknumber} - ${doc.title}.pdf`;
         a.click();
         URL.revokeObjectURL(a.href);
-        // Brief pause between multiple downloads so the browser doesn't block them
         if (i < filesToDownload.length - 1) await new Promise(r => setTimeout(r, 350));
       }
     } catch (e: any) {
@@ -674,6 +652,34 @@ const SignDocument = () => {
     }
   };
 
+  // ── Stamp text block helper (shared across hover ghost + confirmed stamp) ──
+  // const StampTextContent = ({ scale }: { scale: number }) => (
+  //   <div
+  //     className="absolute text-left"
+  //     style={{
+  //       top: `${sigTxtTop}%`,
+  //       left: `${sigTxtLeft}%`,
+  //       whiteSpace: "nowrap",
+  //       lineHeight: 1.2,
+  //     }}
+  //   >
+  //     {showSignedBy && (
+  //       <p className="text-slate-500 truncate" style={{ fontSize: Math.max(6, (textSize - 3) * scale) }}>
+  //         Digitally Signed by:
+  //       </p>
+  //     )}
+  //     <p className="font-bold text-blue-900 truncate px-0.5"
+  //       style={{ fontSize: Math.max(7, textSize * scale) }}>
+  //       {displayName || `${user?.first_name} ${user?.last_name}`}
+  //     </p>
+  //     {(sigPos || user?.position) && (
+  //       <p className="text-blue-700 truncate px-0.5"
+  //         style={{ fontSize: Math.max(6, (textSize - 2) * scale) }}>
+  //         {sigPos || user?.position}
+  //       </p>
+  //     )}
+  //   </div>
+  // );
 
   if (loading) return (
     <UserLayout title="Sign Document">
@@ -730,7 +736,7 @@ const SignDocument = () => {
     <UserLayout title="Sign Document" subtitle={doc ? `${doc.tracknumber} — ${doc.title}` : "Loading..."}>
       <div className="space-y-1">
 
-        {/* ── Success state ─────────────────────────────────────────── */}
+        {/* ── Success state ── */}
         {done && (
           <div className="bg-green-500/10 border border-green-500/30 rounded-2xl px-6 py-8 flex flex-col items-center gap-4 text-center">
             <CheckCircle2 className="w-14 h-14 text-green-500" />
@@ -771,14 +777,12 @@ const SignDocument = () => {
         {!done && (
           <div className="grid grid-cols-[1fr_360px] gap-5 items-start lg:grid-cols-1">
 
-                {/* ══════════════════════════════════════════
-                RIGHT COLUMN — PDF viewer
-                ══════════════════════════════════════════ */}
+            {/* ══ PDF VIEWER (left on desktop) ══ */}
             <div className="min-w-0 sticky top-4 lg:static">
               {doc && selectedFileUrl ? (
-                <div className="bg-card border border-border rounded-xl overflow-hidden flex flex-col ">
+                <div className="bg-card border border-border rounded-xl overflow-hidden flex flex-col">
 
-                  {/* File tabs — shown when document has multiple files */}
+                  {/* File tabs */}
                   {doc.files && doc.files.length > 1 && (
                     <div className="flex items-center gap-1.5 px-4 pt-3 pb-2 flex-wrap border-b border-border bg-muted/20">
                       <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mr-1">Files:</span>
@@ -799,7 +803,6 @@ const SignDocument = () => {
                               ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
                               : <FileText className="w-3 h-3 shrink-0 opacity-60" />}
                             File {idx + 1}
-                          
                           </button>
                         );
                       })}
@@ -879,9 +882,11 @@ const SignDocument = () => {
                       )}
                       {pdfDoc && !pdfLoading && (
                         <div ref={viewerContainerRef} className="relative w-full" style={{ background: "#e5e7eb" }}>
+
+                            {1 && <SigningOverlay />}
                           <canvas ref={canvasRef} className="block" />
 
-                          {/* Placement overlay */}
+                          {/* ── Placement overlay ── */}
                           {placingMode && (
                             <div
                               className="absolute inset-0 cursor-crosshair"
@@ -892,7 +897,9 @@ const SignDocument = () => {
                             >
                               <div className="absolute inset-0 bg-black/20 pointer-events-none" />
                               <div className="absolute top-0 inset-x-0 bg-blue-600/90 text-white text-xs px-4 py-2 flex items-center justify-between pointer-events-none">
-                                <span className="flex items-center gap-1.5"><MousePointer2 className="w-3.5 h-3.5" /> Click to place your signature stamp on the document</span>
+                                <span className="flex items-center gap-1.5">
+                                  <MousePointer2 className="w-3.5 h-3.5" /> Click to place your signature stamp on the document
+                                </span>
                                 <span className="font-mono opacity-75">
                                   {hoverPx ? `x:${Math.round(sigX)} y:${Math.round(sigY)} pg:${sigPage}` : "Move cursor to preview"}
                                 </span>
@@ -920,13 +927,28 @@ const SignDocument = () => {
                                         maxWidth:  "90%",
                                       }} />
                                   )}
-                                  <div className="absolute text-center" style={{ top: `${sigTxtTop}%`, left: `${sigTxtLeft}%`, transform: "translate(-50%, 0)", whiteSpace: "nowrap" }}>
-                                    <p className="font-bold text-blue-900 text-center truncate px-0.5"
+                                  {/* ── LEFT-ALIGNED hover ghost text ── */}
+                                  <div
+                                    className="absolute text-left"
+                                    style={{
+                                      top: `${sigTxtTop}%`,
+                                      left: `${sigTxtLeft}%`,
+                                      whiteSpace: "nowrap",
+                                      lineHeight: 1.2,
+                                    }}
+                                  >
+                                    {showSignedBy && (
+                                      <p className="text-slate-500 truncate"
+                                        style={{ fontSize: Math.max(6, (textSize - 3) * renderScale) }}>
+                                        Digitally Signed by:
+                                      </p>
+                                    )}
+                                    <p className="font-bold text-blue-900 text-left truncate px-0.5"
                                       style={{ fontSize: Math.max(7, textSize * renderScale) }}>
                                       {displayName || `${user?.first_name} ${user?.last_name}`}
                                     </p>
                                     {(sigPos || user?.position) && (
-                                      <p className="text-blue-700 text-center truncate px-0.5"
+                                      <p className="text-blue-700 text-left truncate px-0.5"
                                         style={{ fontSize: Math.max(6, (textSize - 2) * renderScale) }}>
                                         {sigPos || user?.position}
                                       </p>
@@ -937,40 +959,48 @@ const SignDocument = () => {
                             </div>
                           )}
 
-                          {/* Confirmed stamp — draggable + resizable */}
+                          {/* ── Confirmed stamp — small corner handles, full-box content ── */}
                           {!placingMode && stampPlaced && (() => {
                             const cssLeft = sigX * renderScale;
                             const cssTop  = (pdfPageHeight - sigY - sigBoxH) * renderScale;
                             const cssW    = sigBoxW * renderScale;
                             const cssH    = sigBoxH * renderScale;
+                            const HANDLE  = 23; // fixed px, never scale-dependent
                             return (
                               <div
                                 className="absolute border-2 border-blue-500 rounded overflow-hidden select-none"
-                                style={{ left: cssLeft, top: cssTop, width: cssW, height: cssH,
-                                         background: "rgba(59,130,246,0.10)", zIndex: 5, pointerEvents: "all" }}
+                                style={{
+                                  left: cssLeft, top: cssTop, width: cssW, height: cssH,
+                                  background: "rgba(59,130,246,0.10)", zIndex: 5, pointerEvents: "all",
+                                }}
                               >
-                                <div
-                                  className="absolute top-0 left-0 right-0 flex items-center justify-center bg-blue-600/80 cursor-move z-10"
-                                  style={{ height: Math.max(10, 14 * renderScale) }}
-                                  onMouseDown={e => {
-                                    e.preventDefault(); e.stopPropagation();
-                                    draggingStamp.current = { startX: e.clientX, startY: e.clientY, origX: sigX, origY: sigY };
-                                  }}
-                                >
-                                  <span style={{ fontSize: Math.max(7, 9 * renderScale), color: "white", opacity: 0.9, letterSpacing: 2 }}>⠿</span>
-                                </div>
-                                <div className="absolute inset-0 overflow-hidden pointer-events-none"
-                                  style={{ paddingTop: Math.max(10, 14 * renderScale) }}>
+                                {/* Stamp content — full box */}
+                                <div className="absolute inset-0 overflow-hidden pointer-events-none">
                                   {signImagePreview && (
                                     <img src={signImagePreview} alt="sig"
                                       className="absolute object-contain"
-                                      style={{ top: `${sigImgTop}%`, left: `${sigImgLeft}%`,
-                                               transform: "translate(-50%, 0)", width: imgWidth * renderScale,
-                                               maxWidth: "90%" }} />
+                                      style={{
+                                        top: `${sigImgTop}%`, left: `${sigImgLeft}%`,
+                                        transform: "translate(-50%, 0)",
+                                        width: imgWidth * renderScale, maxWidth: "90%",
+                                      }} />
                                   )}
-                                  <div className="absolute text-center"
-                                    style={{ top: `${sigTxtTop}%`, left: `${sigTxtLeft}%`,
-                                             transform: "translate(-50%, 0)", whiteSpace: "nowrap" }}>
+                                  {/* ── LEFT-ALIGNED confirmed stamp text ── */}
+                                  <div
+                                    className="absolute text-left"
+                                    style={{
+                                      top: `${sigTxtTop}%`,
+                                      left: `${sigTxtLeft}%`,
+                                      whiteSpace: "nowrap",
+                                      lineHeight: 1.2,
+                                    }}
+                                  >
+                                    {showSignedBy && (
+                                      <p className="text-slate-500 truncate"
+                                        style={{ fontSize: Math.max(6, (textSize - 3) * renderScale) }}>
+                                        Digitally Signed by:
+                                      </p>
+                                    )}
                                     <p className="font-bold text-blue-900 truncate px-0.5"
                                       style={{ fontSize: Math.max(7, textSize * renderScale) }}>
                                       {displayName || `${user?.first_name} ${user?.last_name}`}
@@ -983,28 +1013,51 @@ const SignDocument = () => {
                                     )}
                                   </div>
                                 </div>
+
+                                {/* TOP-LEFT: move handle — small square only */}
                                 <div
-                                  className="absolute bottom-0 right-0 flex items-center justify-center bg-blue-600 cursor-se-resize z-10"
-                                  style={{ width: Math.max(10, 14 * renderScale), height: Math.max(10, 14 * renderScale),
-                                           borderTopLeftRadius: 3, color: "white", fontSize: Math.max(8, 10 * renderScale) }}
+                                  title="Drag to move"
+                                  className="absolute top-0 left-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-move z-10 rounded-br"
+                                  style={{ width: HANDLE, height: HANDLE }}
                                   onMouseDown={e => {
                                     e.preventDefault(); e.stopPropagation();
-                                    resizingStamp.current = { startX: e.clientX, startY: e.clientY,
-                                                              origW: sigBoxW, origH: sigBoxH, origY: sigY };
+                                    draggingStamp.current = { startX: e.clientX, startY: e.clientY, origX: sigX, origY: sigY };
                                   }}
-                                >⌟</div>
+                                >
+                                  <span style={{ fontSize: 24, color: "white", lineHeight: 1, userSelect: "none" }}>✥</span>
+                                </div>
+
+                                {/* BOTTOM-RIGHT: resize handle */}
+                                <div
+                                  title="Drag to resize"
+                                  className="absolute bottom-0 right-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-se-resize z-10 rounded-tl"
+                                  style={{ width: HANDLE, height: HANDLE }}
+                                  onMouseDown={e => {
+                                    e.preventDefault(); e.stopPropagation();
+                                    resizingStamp.current = {
+                                      startX: e.clientX, startY: e.clientY,
+                                      origW: sigBoxW, origH: sigBoxH, origY: sigY,
+                                    };
+                                  }}
+                                >
+                                  <span style={{ fontSize: 9, color: "white", lineHeight: 1, userSelect: "none" }}>⌟</span>
+                                </div>
                               </div>
                             );
                           })()}
                         </div>
+
+
                       )}
-                    </div>
+
                     
+                    </div>
                   )}
 
                   {/* Stamp controls bar */}
                   {canSign && (stampPlaced || placingMode) && (
                     <div className="border-t border-border px-5 py-3 flex flex-wrap items-center gap-x-5 gap-y-2 bg-accent/30">
+                      
                       <span className="text-xs font-medium text-muted-foreground">Stamp</span>
                       <label className="flex items-center gap-1.5 text-xs text-foreground">
                         Page
@@ -1012,10 +1065,12 @@ const SignDocument = () => {
                           onChange={e => setSigPage(Math.max(1, Number(e.target.value)))}
                           className="w-14 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50" />
                       </label>
+                      
                       {stampPlaced && (
                         <>
                           <span className="text-xs text-muted-foreground flex items-center gap-1">
-                            <span className="font-mono">⠿</span> drag bar to move &nbsp;·&nbsp; <span className="font-mono">⌟</span> corner to resize
+                            <span className="font-mono text-blue-500">✥</span> top-left to move &nbsp;·&nbsp;
+                            <span className="font-mono text-blue-500">⌟</span> bottom-right to resize
                           </span>
                           <span className="text-xs text-muted-foreground font-mono ml-auto">
                             {Math.round(sigBoxW)}×{Math.round(sigBoxH)} &nbsp; x:{Math.round(sigX)} y:{Math.round(sigY)} pg:{sigPage}
@@ -1024,6 +1079,8 @@ const SignDocument = () => {
                       )}
                     </div>
                   )}
+
+                  
                 </div>
               ) : (
                 <div className="bg-card border border-border rounded-xl px-5 py-12 flex flex-col items-center gap-3 text-muted-foreground text-sm">
@@ -1031,15 +1088,12 @@ const SignDocument = () => {
                   <p>No document file attached.</p>
                 </div>
               )}
-            </div>{/* end RIGHT column */}
+            </div>{/* end PDF viewer column */}
 
-
-            {/* ══════════════════════════════════════════
-                LEFT COLUMN — details, credentials, actions
-                ══════════════════════════════════════════ */}
+            {/* ══ DETAILS + CREDENTIALS + ACTIONS (right on desktop) ══ */}
             <div className="flex flex-col gap-4 min-w-0">
 
-              {/* ── Document info card ──────────────────────────── */}
+              {/* Document info card */}
               {doc && (
                 <div className="bg-card border border-border rounded-xl px-5 py-4">
                   <div className="flex gap-4 items-start">
@@ -1059,7 +1113,7 @@ const SignDocument = () => {
                     )}
                   </div>
 
-                  {/* Signatories grouped by office */}
+                  {/* Signatories */}
                   {doc.signatories.length > 0 && (() => {
                     const sortedByOrder = [...doc.signatories].sort((a, b) => a.order - b.order);
                     const ownerId = doc.userID;
@@ -1067,15 +1121,12 @@ const SignDocument = () => {
                       const aIsOwner = a.user_id === ownerId ? 0 : 1;
                       const bIsOwner = b.user_id === ownerId ? 0 : 1;
                       if (aIsOwner !== bIsOwner) return aIsOwner - bIsOwner;
-
                       if (a.order !== b.order) return a.order - b.order;
                       return a.id - b.id;
                     });
-                    // Map each unique order value → display step number (1, 2, 3...)
                     const uniqueOrders = [...new Set(sorted.map(s => s.order))].sort((a, b) => a - b);
                     const orderToStep: Record<number, number> = {};
                     uniqueOrders.forEach((o, i) => { orderToStep[o] = i + 1; });
-                    // Group by office, preserving order of first appearance
                     const officeGroups: Array<{ office: string; sigs: typeof sorted }> = [];
                     const seenOffices = new Set<string>();
                     sorted.forEach(s => {
@@ -1092,7 +1143,6 @@ const SignDocument = () => {
                         <div className="flex flex-col gap-4">
                           {officeGroups.map(({ office, sigs }) => (
                             <div key={office}>
-                              {/* Office header */}
                               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1.5 px-1">{office}</p>
                               <div className="flex flex-col gap-1.5">
                                 {sigs.map(s => (
@@ -1119,8 +1169,7 @@ const SignDocument = () => {
                                     </div>
                                     {s.signed_at && (
                                       <p className="mt-1 text-muted-foreground pl-7">
-                                        {s.status === "rejected" ? "Declined" : "Signed"} on{" "}
-                                        {fmtSignedAt(s.signed_at)}
+                                        {s.status === "rejected" ? "Declined" : "Signed"} on {fmtSignedAt(s.signed_at)}
                                       </p>
                                     )}
                                     {s.remarks && (
@@ -1142,7 +1191,7 @@ const SignDocument = () => {
                 </div>
               )}
 
-              {/* ── Document files ──────────────────────────────── */}
+              {/* Document files */}
               {doc && (
                 <div className="bg-card border border-border rounded-xl px-5 py-4">
                   <div className="flex items-center justify-between mb-3">
@@ -1157,10 +1206,9 @@ const SignDocument = () => {
                       </button>
                     )}
                   </div>
-                  <DocumentFileList 
-                    document={doc} 
+                  <DocumentFileList
+                    document={doc}
                     onFileSelect={(fileUrl) => {
-                      // Sync the file tabs above the viewer
                       const matched = doc.files?.find(f => f.file_url === fileUrl);
                       if (matched) {
                         switchToFile(matched);
@@ -1175,7 +1223,7 @@ const SignDocument = () => {
                 </div>
               )}
 
-              {/* ── Already signed banner ───────────────────────── */}
+              {/* Already signed banner */}
               {mySig && mySig.status === "signed" && !isOwner && (
                 <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-5 py-4 flex items-center gap-3">
                   <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0" />
@@ -1185,7 +1233,7 @@ const SignDocument = () => {
                 </div>
               )}
 
-              {/* ── Signing panel ───────────────────────────────── */}
+              {/* Signing panel */}
               {canSign && (
                 <div className="flex flex-col gap-4">
 
@@ -1194,18 +1242,14 @@ const SignDocument = () => {
                     <button
                       onClick={() => setSignMode("digital")}
                       className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        signMode === "digital"
-                          ? "bg-card shadow text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
+                        signMode === "digital" ? "bg-card shadow text-foreground" : "text-muted-foreground hover:text-foreground"
                       }`}>
                       <Key className="w-3.5 h-3.5" /> Digital (PNPKI)
                     </button>
                     <button
                       onClick={() => setSignMode("manual")}
                       className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        signMode === "manual"
-                          ? "bg-card shadow text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
+                        signMode === "manual" ? "bg-card shadow text-foreground" : "text-muted-foreground hover:text-foreground"
                       }`}>
                       <PenLine className="w-3.5 h-3.5" /> Manual / Handwritten
                     </button>
@@ -1214,7 +1258,6 @@ const SignDocument = () => {
                   {/* ── Manual sign panel ── */}
                   {signMode === "manual" && (
                     <div className="flex flex-col gap-4">
-                      {/* Step 1 — download all files */}
                       <div className="bg-card border border-border rounded-xl p-5 flex flex-col gap-3">
                         <div className="flex items-center gap-2">
                           <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">1</span>
@@ -1233,13 +1276,11 @@ const SignDocument = () => {
                         </button>
                       </div>
 
-                      {/* Step 2 — upload signed scans (one per file) */}
                       <div className="bg-card border border-border rounded-xl p-5 flex flex-col gap-3">
                         <div className="flex items-center gap-2">
                           <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">2</span>
                           <p className="text-sm font-medium text-foreground">Upload the signed scan{doc && doc.files && doc.files.length > 1 ? "s" : ""}</p>
                         </div>
-                        {/* One upload zone per document file */}
                         {(doc?.files && doc.files.length > 0 ? doc.files : []).map((docFile, idx) => {
                           const uploaded = manualSignedFiles[docFile.id];
                           return (
@@ -1258,11 +1299,9 @@ const SignDocument = () => {
                                     setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
                                 }}
                                 className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-5 cursor-pointer transition ${
-                                  manualDragging
-                                    ? "border-primary bg-primary/5"
-                                    : uploaded
-                                    ? "border-green-500/50 bg-green-500/5"
-                                    : "border-border bg-background hover:border-primary/40"
+                                  manualDragging ? "border-primary bg-primary/5" :
+                                  uploaded ? "border-green-500/50 bg-green-500/5" :
+                                  "border-border bg-background hover:border-primary/40"
                                 }`}>
                                 {uploaded ? (
                                   <>
@@ -1288,7 +1327,6 @@ const SignDocument = () => {
                         })}
                       </div>
 
-                      {/* Remarks */}
                       {mySig && mySig.status === "pending" && (
                         <div className="flex flex-col gap-1.5">
                           <label className="text-sm font-medium text-foreground">
@@ -1304,14 +1342,12 @@ const SignDocument = () => {
                         </div>
                       )}
 
-                      {/* Error */}
                       {error && (
                         <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/30 text-destructive text-sm rounded-xl px-4 py-3">
                           <AlertTriangle className="w-4 h-4 shrink-0" /><span>{error}</span>
                         </div>
                       )}
 
-                      {/* Submit + Decline */}
                       <div className="flex gap-2">
                         {mySig && mySig.status === "pending" && (
                           <button onClick={() => setDeclineOpen(true)} disabled={manualUploading}
@@ -1322,7 +1358,6 @@ const SignDocument = () => {
                         <button
                           onClick={handleManualSign}
                           disabled={manualUploading || Object.keys(manualSignedFiles).length === 0}
-                          title={Object.keys(manualSignedFiles).length === 0 ? "Upload at least one signed scan first" : undefined}
                           className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">
                           {manualUploading
                             ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</>
@@ -1339,191 +1374,158 @@ const SignDocument = () => {
 
                   {/* ── Digital sign panel ── */}
                   {signMode === "digital" && (
-                  <>
-                  {/* Signing Credentials */}
-                  <div className="bg-card border border-border rounded-xl overflow-hidden">
-                    <button onClick={() => setCredOpen(v => !v)}
-                      className="w-full flex items-center gap-2 px-5 py-3.5 text-sm font-medium text-foreground hover:bg-accent/50 transition">
-                      <Settings2 className="w-4 h-4 text-primary" />
-                      <span>Signing Credentials</span>
-                      {p12File && <span className="ml-2 text-[10px] bg-green-500/10 text-green-600 px-2 py-0.5 rounded-full">P12 loaded</span>}
-                      <span className="ml-auto text-[10px] bg-yellow-500/10 text-yellow-600 px-2 py-0.5 rounded-full">Local only</span>
-                      <span className="text-muted-foreground ml-2">{credOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</span>
-                    </button>
-                    {credOpen && (
-                      <div className="border-t border-border px-5 py-4 flex flex-col gap-4">
+                    <>
+                      <div className="bg-card border border-border rounded-xl overflow-hidden">
+                        <button onClick={() => setCredOpen(v => !v)}
+                          className="w-full flex items-center gap-2 px-5 py-3.5 text-sm font-medium text-foreground hover:bg-accent/50 transition">
+                          <Settings2 className="w-4 h-4 text-primary" />
+                          <span>Signing Credentials</span>
+                          {p12File && <span className="ml-2 text-[10px] bg-green-500/10 text-green-600 px-2 py-0.5 rounded-full">P12 loaded</span>}
+                          <span className="ml-auto text-[10px] bg-yellow-500/10 text-yellow-600 px-2 py-0.5 rounded-full">Local only</span>
+                          <span className="text-muted-foreground ml-2">{credOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</span>
+                        </button>
+                        {credOpen && (
+                          <div className="border-t border-border px-5 py-4 flex flex-col gap-4">
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-sm font-medium text-foreground">P12 / PFX Certificate <span className="text-destructive">*</span></label>
+                              <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
+                                <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
+                                <span className="text-sm truncate">
+                                  {p12FileName
+                                    ? <span className="text-foreground">{p12FileName}</span>
+                                    : <span className="text-muted-foreground">Click to select .p12 / .pfx — auto-saved for next time</span>}
+                                </span>
+                                <input type="file" accept=".p12,.pfx" className="hidden" onChange={handleP12Change} />
+                              </label>
+                            </div>
 
-                        {/* P12 file */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-sm font-medium text-foreground">P12 / PFX Certificate <span className="text-destructive">*</span></label>
-                          <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
-                            <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
-                            <span className="text-sm truncate">
-                              {p12FileName
-                                ? <span className="text-foreground">{p12FileName}</span>
-                                : <span className="text-muted-foreground">Click to select .p12 / .pfx — auto-saved for next time</span>}
-                            </span>
-                            <input type="file" accept=".p12,.pfx" className="hidden" onChange={handleP12Change} />
-                          </label>
-                        </div>
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-sm font-medium text-foreground">P12 Password <span className="text-destructive">*</span></label>
+                              <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                                placeholder="Enter your P12 password"
+                                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+                            </div>
 
-                        {/* Password */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-sm font-medium text-foreground">P12 Password <span className="text-destructive">*</span></label>
-                          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                            placeholder="Enter your P12 password"
-                            className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-                        </div>
+                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
+                              <div className="flex flex-col gap-1.5">
+                                <label className="text-sm font-medium text-foreground">Display Name</label>
+                                <input value={displayName} onChange={e => setDisplayName(e.target.value)}
+                                  placeholder={`${user?.first_name ?? ""} ${user?.last_name ?? ""}`}
+                                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+                              </div>
+                              <div className="flex flex-col gap-1.5">
+                                <label className="text-sm font-medium text-foreground">Position / Title</label>
+                                <input value={sigPos} onChange={e => setSigPos(e.target.value)}
+                                  placeholder={user?.position ?? "Your position"}
+                                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+                              </div>
+                            </div>
 
-                        {/* Name + Position */}
-                        <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-medium text-foreground">Display Name</label>
-                            <input value={displayName} onChange={e => setDisplayName(e.target.value)}
-                              placeholder={`${user?.first_name ?? ""} ${user?.last_name ?? ""}`}
-                              className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-sm font-medium text-foreground">Signature Image <span className="text-muted-foreground font-normal">(optional — auto-saved)</span></label>
+                              <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
+                                <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
+                                <span className="text-sm text-muted-foreground truncate">
+                                  {signImage ? signImage.name : signImagePreview ? "signature.png (saved)" : "Click to upload PNG/JPG"}
+                                </span>
+                                <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handleImageChange} />
+                              </label>
+                              {signImagePreview && (
+                                <img src={signImagePreview} alt="sig preview" className="mt-1 h-12 object-contain border border-border rounded-lg bg-white p-1" />
+                              )}
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-xs font-medium text-foreground flex items-center">
+                                Text Size
+                                <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{textSize} pt</span>
+                              </label>
+                              <input type="range" min={8} max={24} value={textSize} onChange={e => setTextSize(Number(e.target.value))} className="w-full accent-primary" />
+                            </div>
+
+                            <div className="flex flex-col gap-1.5">
+                              <label className="text-xs font-medium text-foreground flex items-center">
+                                Signature Image Width
+                                <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{imgWidth} px</span>
+                              </label>
+                              <input type="range" min={50} max={300} step={10} value={imgWidth} onChange={e => setImgWidth(Number(e.target.value))} className="w-full accent-primary" />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
+                              <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-medium text-foreground flex items-center">
+                                  Stamp Width
+                                  <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{sigBoxW} pt</span>
+                                </label>
+                                <input type="range" min={140} max={420} step={10} value={sigBoxW}
+                                  onChange={e => { const n = Number(e.target.value); setSigBoxW(n); localStorage.setItem("sig_stamp_width", String(n)); }}
+                                  className="w-full accent-primary" />
+                              </div>
+                              <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-medium text-foreground flex items-center">
+                                  Stamp Height
+                                  <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{sigBoxH} pt</span>
+                                </label>
+                                <input type="range" min={50} max={220} step={5} value={sigBoxH}
+                                  onChange={e => { const n = Number(e.target.value); setSigBoxH(n); localStorage.setItem("sig_stamp_height", String(n)); }}
+                                  className="w-full accent-primary" />
+                              </div>
+                            </div>
                           </div>
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-sm font-medium text-foreground">Position / Title</label>
-                            <input value={sigPos} onChange={e => setSigPos(e.target.value)}
-                              placeholder={user?.position ?? "Your position"}
-                              className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-                          </div>
-                        </div>
-
-                        {/* Signature image */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-sm font-medium text-foreground">Signature Image <span className="text-muted-foreground font-normal">(optional — auto-saved)</span></label>
-                          <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
-                            <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
-                            <span className="text-sm text-muted-foreground truncate">
-                              {signImage ? signImage.name : signImagePreview ? "signature.png (saved)" : "Click to upload PNG/JPG"}
-                            </span>
-                            <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handleImageChange} />
-                          </label>
-                          {signImagePreview && (
-                            <img src={signImagePreview} alt="sig preview" className="mt-1 h-12 object-contain border border-border rounded-lg bg-white p-1" />
-                          )}
-                        </div>
-
-                        {/* Text size slider */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-xs font-medium text-foreground flex items-center">
-                            Text Size
-                            <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{textSize} pt</span>
-                          </label>
-                          <input type="range" min={8} max={24} value={textSize} onChange={e => setTextSize(Number(e.target.value))} className="w-full accent-primary" />
-                        </div>
-
-                        {/* Image width slider */}
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-xs font-medium text-foreground flex items-center">
-                            Signature Image Width
-                            <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{imgWidth} px</span>
-                          </label>
-                          <input type="range" min={50} max={300} step={10} value={imgWidth} onChange={e => setImgWidth(Number(e.target.value))} className="w-full accent-primary" />
-                        </div>
-
-                        {/* Stamp box size */}
-                        <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-xs font-medium text-foreground flex items-center">
-                              Stamp Width
-                              <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{sigBoxW} pt</span>
-                            </label>
-                            <input
-                              type="range"
-                              min={140}
-                              max={420}
-                              step={10}
-                              value={sigBoxW}
-                              onChange={e => {
-                                const next = Number(e.target.value);
-                                setSigBoxW(next);
-                                localStorage.setItem("sig_stamp_width", String(next));
-                              }}
-                              className="w-full accent-primary"
-                            />
-                          </div>
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-xs font-medium text-foreground flex items-center">
-                              Stamp Height
-                              <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{sigBoxH} pt</span>
-                            </label>
-                            <input
-                              type="range"
-                              min={50}
-                              max={220}
-                              step={5}
-                              value={sigBoxH}
-                              onChange={e => {
-                                const next = Number(e.target.value);
-                                setSigBoxH(next);
-                                localStorage.setItem("sig_stamp_height", String(next));
-                              }}
-                              className="w-full accent-primary"
-                            />
-                          </div>
-                        </div>
-
+                        )}
                       </div>
-                    )}
-                  </div>
 
-                  {/* Error banner */}
-                  {error && (
-                    <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/30 text-destructive text-sm rounded-xl px-4 py-3">
-                      <AlertTriangle className="w-4 h-4 shrink-0" /><span>{error}</span>
-                    </div>
+                      {error && (
+                        <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/30 text-destructive text-sm rounded-xl px-4 py-3">
+                          <AlertTriangle className="w-4 h-4 shrink-0" /><span>{error}</span>
+                        </div>
+                      )}
+
+                      {mySig && mySig.status === "pending" && (
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-sm font-medium text-foreground">
+                            Remarks <span className="text-muted-foreground font-normal">(optional)</span>
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={signRemarks}
+                            onChange={e => setSignRemarks(e.target.value)}
+                            placeholder="Add a note about your signature..."
+                            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none transition"
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex gap-2">
+                        {mySig && mySig.status === "pending" && (
+                          <button onClick={() => setDeclineOpen(true)} disabled={signing}
+                            className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-destructive/60 text-destructive text-sm font-semibold hover:bg-destructive/10 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                            <XCircle className="w-4 h-4" /> Decline
+                          </button>
+                        )}
+                        <button
+                          onClick={handleSign}
+                          disabled={signing || Object.values(fileStampsState).every(c => !c.placed)}
+                          title={Object.values(fileStampsState).every(c => !c.placed) ? "Place your signature on at least one document file first" : undefined}
+                          className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">
+                          {signing
+                            ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing document...</>
+                            : <><Key className="w-4 h-4" /> Sign with PNPKI</>}
+                        </button>
+                      </div>
+                      {Object.values(fileStampsState).every(c => !c.placed) && (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400 text-center">
+                          ⚠ Click <strong>Place Signature</strong> on the document viewer to position your stamp before signing.
+                        </p>
+                      )}
+                      <p className="text-[11px] text-muted-foreground text-center">
+                        Your P12 certificate and password are used only in your browser and are never sent to our server.
+                      </p>
+                    </>
                   )}
-
-                  {/* Remarks for signing */}
-                  {mySig && mySig.status === "pending" && (
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-sm font-medium text-foreground">
-                        Remarks <span className="text-muted-foreground font-normal">(optional)</span>
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={signRemarks}
-                        onChange={e => setSignRemarks(e.target.value)}
-                        placeholder="Add a note about your signature..."
-                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none transition"
-                      />
-                    </div>
-                  )}
-
-                  {/* Sign / Decline buttons */}
-                  <div className="flex gap-2">
-                    {mySig && mySig.status === "pending" && (
-                      <button onClick={() => setDeclineOpen(true)} disabled={signing}
-                        className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-destructive/60 text-destructive text-sm font-semibold hover:bg-destructive/10 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                        <XCircle className="w-4 h-4" /> Decline
-                      </button>
-                    )}
-                  <button onClick={handleSign} disabled={signing || Object.values(fileStampsState).every(c => !c.placed)}
-                      title={Object.values(fileStampsState).every(c => !c.placed) ? "Place your signature on at least one document file first" : undefined}
-                      className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed">
-                      {signing
-                        ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing document...</>
-                        : <><Key className="w-4 h-4" /> Sign with PNPKI</>}
-                    </button>
-                  </div>
-                  {Object.values(fileStampsState).every(c => !c.placed) && (
-                    <p className="text-[11px] text-amber-600 dark:text-amber-400 text-center">
-                      ⚠ Click <strong>Place Signature</strong> on the document viewer to position your stamp before signing.
-                    </p>
-                  )}
-                  <p className="text-[11px] text-muted-foreground text-center">
-                    Your P12 certificate and password are used only in your browser and are never sent to our server.
-                  </p>
-                  </>
-                  )}{/* end digital panel */}
-
                 </div>
               )}
 
-              {/* ── Not a signatory and not owner ───────────────── */}
               {!canSign && !error && doc && !loading && (
                 <div className="bg-accent/40 border border-border rounded-xl px-5 py-4 text-sm text-muted-foreground">
                   You are not assigned as a signatory for this document.
@@ -1535,14 +1537,12 @@ const SignDocument = () => {
                 </div>
               )}
 
-            </div>{/* end LEFT column */}
-
-        
+            </div>{/* end details column */}
           </div>
         )}
       </div>
 
-      {/* ── Decline modal ──────────────────────────────────────────────────── */}
+      {/* ── Decline modal ── */}
       {declineOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 flex flex-col gap-4">
@@ -1557,13 +1557,10 @@ const SignDocument = () => {
                 </p>
               </div>
             </div>
-
-            {/* Document summary */}
             <div className="bg-accent/50 rounded-lg px-4 py-3 text-sm">
               <p className="font-medium text-foreground truncate">{doc?.title}</p>
               <p className="text-xs text-muted-foreground font-mono mt-0.5">{doc?.tracknumber}</p>
             </div>
-
             <textarea
               rows={4}
               placeholder="Reason for declining (optional but recommended)..."
@@ -1571,7 +1568,6 @@ const SignDocument = () => {
               onChange={e => setDeclineReason(e.target.value)}
               className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-destructive/40 resize-none transition"
             />
-
             <div className="flex gap-3">
               <button
                 onClick={() => { setDeclineOpen(false); setDeclineReason(""); }}
