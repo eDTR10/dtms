@@ -883,7 +883,7 @@ const SignDocument = () => {
                       {pdfDoc && !pdfLoading && (
                         <div ref={viewerContainerRef} className="relative w-full" style={{ background: "#e5e7eb" }}>
 
-                            {1 && <SigningOverlay />}
+                            {signing && <SigningOverlay />}
                           <canvas ref={canvasRef} className="block" />
 
                           {/* ── Placement overlay ── */}

@@ -38,6 +38,63 @@ const statusLabel = (doc: Document, currentUserId?: number): string => {
 
 const PAGE_SIZE = 8;
 
+// ── Table skeleton row ────────────────────────────────────────────────────────
+const TableSkeletonRow = ({ index }: { index: number }) => (
+  <div
+    className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center slg:grid-cols-[2fr_1fr_180px]"
+    style={{ animationDelay: `${index * 60}ms` }}
+  >
+    {/* Document col */}
+    <div className="flex items-center gap-3 min-w-0">
+      <div className="w-8 h-8 shrink-0 rounded-lg bg-accent animate-pulse" />
+      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+        {/* Title line — varying widths for natural look */}
+        <div
+          className="h-3.5 rounded bg-accent animate-pulse"
+          style={{ width: `${55 + (index % 4) * 10}%` }}
+        />
+        <div
+          className="h-2.5 rounded bg-accent/70 animate-pulse"
+          style={{ width: `${30 + (index % 3) * 8}%` }}
+        />
+      </div>
+    </div>
+
+    {/* Track no col */}
+    <div className="slg:hidden">
+      <div className="h-3 rounded bg-accent animate-pulse w-24" />
+    </div>
+
+    {/* Date col */}
+    <div className="slg:hidden">
+      <div className="h-3 rounded bg-accent animate-pulse w-20" />
+    </div>
+
+    {/* Status col */}
+    <div>
+      <div className="h-5 rounded-full bg-accent animate-pulse w-28" />
+    </div>
+
+    {/* Actions col */}
+    <div className="flex items-center gap-1.5">
+      {[1, 2, 3].map(i => (
+        <div key={i} className="w-7 h-7 rounded-md bg-accent animate-pulse" />
+      ))}
+    </div>
+  </div>
+);
+
+// ── Stat card skeleton ────────────────────────────────────────────────────────
+const StatCardSkeleton = () => (
+  <div className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
+    <div className="w-9 h-9 rounded-lg bg-accent animate-pulse shrink-0" />
+    <div className="flex flex-col gap-2">
+      <div className="h-6 w-8 rounded bg-accent animate-pulse" />
+      <div className="h-2.5 w-20 rounded bg-accent/70 animate-pulse" />
+    </div>
+  </div>
+);
+
 const MyDocuments = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -50,7 +107,6 @@ const MyDocuments = () => {
   const typeDropRef                    = useRef<HTMLDivElement>(null);
   const [page, setPage]               = useState(1);
 
-  // Close type dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (typeDropRef.current && !typeDropRef.current.contains(e.target as Node))
@@ -59,12 +115,12 @@ const MyDocuments = () => {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
   const [downloading, setDownloading] = useState<number | null>(null);
   const [resendDoc, setResendDoc]     = useState<Document | null>(null);
   const [resending,  setResending]    = useState(false);
   const [resendError, setResendError] = useState<string | null>(null);
 
-  // ── Edit document state (rejected docs only) ─────────────────────────
   const [editDoc,    setEditDoc]    = useState<Document | null>(null);
   const [editTitle,  setEditTitle]  = useState("");
   const [editType,   setEditType]   = useState("");
@@ -73,7 +129,6 @@ const MyDocuments = () => {
   const [editSaving, setEditSaving] = useState(false);
   const [editError,  setEditError]  = useState<string | null>(null);
 
-  // ── Routing editor state (For Sending docs) ──────────────────
   interface RoutingSig { user_id: number; user_email: string; user_name: string; order: number; }
   const [routingDoc,    setRoutingDoc]    = useState<Document | null>(null);
   const [routingSigs,   setRoutingSigs]   = useState<RoutingSig[]>([]);
@@ -85,7 +140,6 @@ const MyDocuments = () => {
   const [routingSaving, setRoutingSaving] = useState(false);
   const [routingError,  setRoutingError]  = useState<string | null>(null);
 
-  // ── Delete document state ────────────────────────────────────
   const [deleteDoc,  setDeleteDoc]  = useState<Document | null>(null);
   const [deleting,   setDeleting]   = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -222,6 +276,7 @@ const MyDocuments = () => {
       setDocs(prev => prev.filter(d => d.id !== deleteDoc.id));
       setDeleteDoc(null);
     } catch (e: any) {
+      setDeleting(false);
       setDeleteError(e?.response?.data?.detail || e?.message || "Failed to delete document.");
     } finally {
       setDeleting(false);
@@ -234,11 +289,18 @@ const MyDocuments = () => {
     documentApi.myDocs(controller.signal)
       .then(setDocs)
       .catch((err) => { if (err?.code !== "ERR_CANCELED") console.error(err); })
-      .finally(() => setLoading(false));
+      .finally(() => {
+
+
+        setTimeout(() => setLoading(false), 500);
+      }
+      
+      
+      
+      );
     return () => controller.abort();
   }, []);
 
-  // Reset to page 1 whenever search or filters change
   useEffect(() => { setPage(1); }, [search, filter, typeFilter]);
 
   const statuses  = ["All", "For Sending", "For Signing", "Completed", "Signed", "Rejected"];
@@ -258,14 +320,12 @@ const MyDocuments = () => {
     } else if (filter === "For Sending") {
       matchFilter = d.status === "Pending";
     } else if (filter === "For Signing") {
-      // Only show docs that are 'For Signing' and the user is a signatory who has NOT signed
       const isSignatory = d.signatories?.some(s => s.user_id === user?.id);
       const hasSigned = d.signatories?.some(s => s.user_id === user?.id && s.status === "signed");
       matchFilter = d.status === "For Signing" && isSignatory && !hasSigned;
     } else if (filter === "Completed") {
       matchFilter = d.status === "Completed" && d.userID === user?.id;
     } else if (filter === "Signed") {
-      // Show docs where user is a signatory (not owner) and has signed
       const isSignatory = d.signatories?.some(s => s.user_id === user?.id);
       const hasSigned = d.signatories?.some(s => s.user_id === user?.id && s.status === "signed");
       matchFilter = !!(d.status === "Completed" && d.userID !== user?.id && isSignatory && hasSigned) ||
@@ -281,30 +341,24 @@ const MyDocuments = () => {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Stat counters
   const pending    = docs.filter(d => d.status === "Pending").length;
   const forSigning = docs.filter(d => d.status === "For Signing").length;
-  // Completed: only documents the current user owns
   const completed  = docs.filter(d => d.status === "Completed" && d.userID === user?.id).length;
-  // Signed: docs where the current user is a signatory who has personally signed
   const signedBySelf = docs.filter(d =>
     d.signatories.some(s => s.user_id === user?.id && s.status === "signed")
   ).length;
 
-  // Toggle a signatory between parallel (same order as above) and sequential
   const toggleParallel = (index: number) => {
     setRoutingSigs(prev => {
       const updated = prev.map(s => ({ ...s }));
       const above   = updated[index - 1];
       const current = updated[index];
       if (current.order === above.order) {
-        // Split: bump this sig and all subsequent ones that share or exceed this order
         const threshold = current.order;
         for (let j = index; j < updated.length; j++) {
           if (updated[j].order >= threshold) updated[j].order += 1;
         }
       } else {
-        // Merge: pull this sig up to the same order as the one above
         current.order = above.order;
       }
       return updated;
@@ -316,20 +370,23 @@ const MyDocuments = () => {
 
       {/* Quick stats */}
       <div className="grid grid-cols-4 gap-4 mb-6 lg:grid-cols-2 sm:grid-cols-2">
-        {[
-          { label: "For Sending",  value: pending,      icon: <Clock className="w-4 h-4" />,        color: "text-yellow-500" },
-          { label: "For Signing", value: forSigning,   icon: <Send className="w-4 h-4" />,          color: "text-blue-500" },
-          { label: "Completed",   value: completed,    icon: <CheckCircle2 className="w-4 h-4" />,  color: "text-green-500" },
-          { label: "Signed",      value: signedBySelf, icon: <Eye className="w-4 h-4" />,           color: "text-teal-500" },
-        ].map(s => (
-          <div key={s.label} className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
-            <span className={`p-2 rounded-lg bg-accent ${s.color}`}>{s.icon}</span>
-            <div>
-              <p className="text-2xl font-bold text-foreground">{s.value}</p>
-              <p className="text-xs text-muted-foreground">{s.label}</p>
-            </div>
-          </div>
-        ))}
+        {loading
+          ? [...Array(4)].map((_, i) => <StatCardSkeleton key={i} />)
+          : [
+              { label: "For Sending",  value: pending,      icon: <Clock className="w-4 h-4" />,        color: "text-yellow-500" },
+              { label: "For Signing", value: forSigning,   icon: <Send className="w-4 h-4" />,          color: "text-blue-500" },
+              { label: "Completed",   value: completed,    icon: <CheckCircle2 className="w-4 h-4" />,  color: "text-green-500" },
+              { label: "Signed",      value: signedBySelf, icon: <Eye className="w-4 h-4" />,           color: "text-teal-500" },
+            ].map(s => (
+              <div key={s.label} className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
+                <span className={`p-2 rounded-lg bg-accent ${s.color}`}>{s.icon}</span>
+                <div>
+                  <p className="text-2xl font-bold text-foreground">{s.value}</p>
+                  <p className="text-xs text-muted-foreground">{s.label}</p>
+                </div>
+              </div>
+            ))
+        }
       </div>
 
       {/* Toolbar */}
@@ -343,7 +400,6 @@ const MyDocuments = () => {
               className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
             />
           </div>
-          {/* Document type dropdown */}
           <div ref={typeDropRef} className="relative shrink-0 sm:w-full">
             <button
               onClick={() => setTypeDropOpen(o => !o)}
@@ -365,7 +421,6 @@ const MyDocuments = () => {
               )}
               <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${typeDropOpen ? "rotate-180" : ""}`} />
             </button>
-
             {typeDropOpen && (
               <div className="absolute z-30 mt-1.5 right-0 sm:left-0 w-56 bg-popover border border-border rounded-xl shadow-xl overflow-hidden">
                 <p className="px-3 pt-3 pb-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Document Type</p>
@@ -399,109 +454,106 @@ const MyDocuments = () => {
         </div>
       </div>
 
-      {/* Table */}
-      {loading ? (
-        <div className="space-y-3">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-14 rounded-xl bg-accent/40 animate-pulse" />
-          ))}
+      {/* ── Table ── */}
+      <div className="bg-card border border-border rounded-xl overflow-hidden min-h-[530px] flex flex-col">
+        {/* Header — always visible */}
+        <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_180px]">
+          <span>Document</span>
+          <span className="slg:hidden">Track No.</span>
+          <span className="slg:hidden">Date</span>
+          <span>Status</span>
+          <span>Actions</span>
         </div>
-      ) : (
-        <div className="bg-card border border-border rounded-xl overflow-hidden min-h-[530px] flex flex-col">
-          <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_180px]">
-            <span>Document</span>
-            <span className="slg:hidden">Track No.</span>
-            <span className="slg:hidden">Date</span>
-            <span>Status</span>
-            <span>Actions</span>
-          </div>
 
-          {filtered.length === 0 ? (
-            <div className="px-5 py-12 text-center text-sm text-muted-foreground">No documents found.</div>
-          ) : (
-            paginated.map(doc => (
-              <div
-                key={doc.id}
-                className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[2fr_1fr_180px]"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
-                    <FileText className="w-4 h-4 text-muted-foreground" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
-                    <p className="text-xs text-muted-foreground truncate">{doc.type}</p>
-                  </div>
+        {loading ? (
+          // ── Skeleton rows ──
+          [...Array(PAGE_SIZE)].map((_, i) => (
+            <TableSkeletonRow key={i} index={i} />
+          ))
+        ) : filtered.length === 0 ? (
+          <div className="px-5 py-12 text-center text-sm text-muted-foreground flex-1 flex items-center justify-center">
+            No documents found.
+          </div>
+        ) : (
+          paginated.map(doc => (
+            <div
+              key={doc.id}
+              className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[2fr_1fr_180px]"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
+                  <FileText className="w-4 h-4 text-muted-foreground" />
                 </div>
-                <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>
-                <p className="text-sm text-muted-foreground slg:hidden">{doc.datesubmitted}</p>
-                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground"}`}>
-                  {statusLabel(doc, user?.id)}
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => navigate(`/dtms/sign/${doc.tracknumber}`)}
-                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-primary transition-colors"
-                    title="View"
-                  >
-                    <Eye className="w-4 h-4" />
-                  </button>
-                  {((doc.files && doc.files.length > 0) || doc.file_url) && (
-                    <button
-                      onClick={() => handleDownload(doc)}
-                      disabled={downloading === doc.id}
-                      className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-green-600 transition-colors disabled:opacity-50"
-                      title={doc.files && doc.files.length > 1 ? `Download ${doc.files.length} files` : "Download PDF"}
-                    >
-                      <Download className={`w-4 h-4 ${downloading === doc.id ? "animate-bounce" : ""}`} />
-                    </button>
-                  )}
-                  {/* Edit routing (For Sending docs) */}
-                  {doc.userID === user?.id && doc.status === "Pending" && (
-                    <button
-                      onClick={() => openRouting(doc)}
-                      className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-primary transition-colors"
-                      title="Edit routing / signatories"
-                    >
-                      <GitBranch className="w-4 h-4" />
-                    </button>
-                  )}
-                  {/* Re-send after rejection */}
-                  {doc.userID === user?.id && doc.status === "Rejected" && (
-                    <button
-                      onClick={() => setResendDoc(doc)}
-                      className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-orange-500 transition-colors"
-                      title="Re-send document"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  )}
-                  {/* Edit document (rejected docs only) */}
-                  {doc.userID === user?.id && doc.status === "Rejected" && (
-                    <button
-                      onClick={() => openEdit(doc)}
-                      className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-amber-500 transition-colors"
-                      title="Edit document"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                  )}
-                  {/* Delete document */}
-                  {doc.userID === user?.id && (
-                    <button
-                      onClick={() => { setDeleteDoc(doc); setDeleteError(null); }}
-                      className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-destructive transition-colors"
-                      title="Delete document"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
+                  <p className="text-xs text-muted-foreground truncate">{doc.type}</p>
                 </div>
               </div>
-            ))
-          )}
-        </div>
-      )}
+              <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>
+              <p className="text-sm text-muted-foreground slg:hidden">{doc.datesubmitted}</p>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground"}`}>
+                {statusLabel(doc, user?.id)}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => navigate(`/dtms/sign/${doc.tracknumber}`)}
+                  className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-primary transition-colors"
+                  title="View"
+                >
+                  <Eye className="w-4 h-4" />
+                </button>
+                {((doc.files && doc.files.length > 0) || doc.file_url) && (
+                  <button
+                    onClick={() => handleDownload(doc)}
+                    disabled={downloading === doc.id}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-green-600 transition-colors disabled:opacity-50"
+                    title={doc.files && doc.files.length > 1 ? `Download ${doc.files.length} files` : "Download PDF"}
+                  >
+                    <Download className={`w-4 h-4 ${downloading === doc.id ? "animate-bounce" : ""}`} />
+                  </button>
+                )}
+                {doc.userID === user?.id && doc.status === "Pending" && (
+                  <button
+                    onClick={() => openRouting(doc)}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-primary transition-colors"
+                    title="Edit routing / signatories"
+                  >
+                    <GitBranch className="w-4 h-4" />
+                  </button>
+                )}
+                {doc.userID === user?.id && doc.status === "Rejected" && (
+                  <button
+                    onClick={() => setResendDoc(doc)}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-orange-500 transition-colors"
+                    title="Re-send document"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                )}
+                {doc.userID === user?.id && doc.status === "Rejected" && (
+                  <button
+                    onClick={() => openEdit(doc)}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-amber-500 transition-colors"
+                    title="Edit document"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                )}
+                {doc.userID === user?.id && (
+                  <button
+                    onClick={() => { setDeleteDoc(doc); setDeleteError(null); }}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-destructive transition-colors"
+                    title="Delete document"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
       {!loading && (
         <div className="flex items-center justify-between mt-3 gap-2 flex-wrap">
           <p className="text-xs text-muted-foreground">
@@ -545,7 +597,7 @@ const MyDocuments = () => {
         </div>
       )}
 
-      {/* Edit Routing modal (For Sending docs) */}
+      {/* Edit Routing modal */}
       {routingDoc && (() => {
         const filtered = routingUsers.filter(u => {
           if (!routingOffice) return false;
@@ -559,7 +611,6 @@ const MyDocuments = () => {
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
             <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-lg flex flex-col max-h-[90vh]">
-              {/* Header */}
               <div className="flex items-center gap-3 px-6 pt-6 pb-4 border-b border-border">
                 <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                   <GitBranch className="w-5 h-5 text-primary" />
@@ -570,13 +621,10 @@ const MyDocuments = () => {
                 </div>
                 <button onClick={() => setRoutingDoc(null)} className="text-muted-foreground hover:text-foreground transition-colors text-xl leading-none">&times;</button>
               </div>
-
               <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5">
-
-                {/* Current signatory queue */}
                 <div className="flex flex-col gap-2">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Signatory Order</p>
-  {(() => {
+                  {(() => {
                     const sortedUniqueOrders = [...new Set(routingSigs.map(s => s.order))].sort((a, b) => a - b);
                     const stepNum = (order: number) => sortedUniqueOrders.indexOf(order) + 1;
                     return routingSigs.length === 0 ? (
@@ -586,7 +634,6 @@ const MyDocuments = () => {
                         const isParallelWithAbove = i > 0 && s.order === routingSigs[i - 1].order;
                         return (
                           <div key={s.user_id}>
-                            {/* Parallel indicator between rows */}
                             {i > 0 && (
                               <div className="flex items-center justify-center h-5">
                                 <button
@@ -624,8 +671,6 @@ const MyDocuments = () => {
                     );
                   })()}
                 </div>
-
-                {/* Add from office picker */}
                 <div className="border border-border rounded-xl p-4 flex flex-col gap-3 bg-background/50">
                   <p className="text-xs text-muted-foreground font-medium">Add signatory from an office</p>
                   <div className="relative">
@@ -676,15 +721,12 @@ const MyDocuments = () => {
                     </>
                   )}
                 </div>
-
                 {routingError && (
                   <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/30 text-destructive text-sm rounded-lg px-3 py-2.5">
                     <AlertTriangle className="w-4 h-4 shrink-0" /><span>{routingError}</span>
                   </div>
                 )}
               </div>
-
-              {/* Footer */}
               <div className="flex gap-3 px-6 py-4 border-t border-border">
                 <button onClick={() => setRoutingDoc(null)}
                   className="flex-1 py-2.5 rounded-lg border border-border text-sm text-muted-foreground hover:bg-accent transition">
@@ -720,7 +762,6 @@ const MyDocuments = () => {
                 Have you updated your document based on the feedback?
               </p>
             </div>
-            {/* Signatories list */}
             {resendDoc.signatories.length > 0 && (
               <div className="mb-4">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Will notify</p>
@@ -762,11 +803,10 @@ const MyDocuments = () => {
         </div>
       )}
 
-      {/* Edit document modal (only for rejected docs) */}
+      {/* Edit document modal */}
       {editDoc && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-lg flex flex-col max-h-[90vh]">
-            {/* Header */}
             <div className="flex items-center gap-3 px-6 pt-6 pb-4 border-b border-border">
               <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0">
                 <Pencil className="w-5 h-5 text-amber-500" />
@@ -778,42 +818,23 @@ const MyDocuments = () => {
               <button onClick={() => setEditDoc(null)}
                 className="text-muted-foreground hover:text-foreground transition-colors text-lg leading-none">&times;</button>
             </div>
-
-            {/* Body */}
             <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-4">
-              {/* Title */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-foreground">Title</label>
-                <input
-                  value={editTitle}
-                  onChange={e => setEditTitle(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
-                />
+                <input value={editTitle} onChange={e => setEditTitle(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
               </div>
-
-              {/* Type */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-foreground">Document Type</label>
-                <input
-                  value={editType}
-                  onChange={e => setEditType(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
-                />
+                <input value={editType} onChange={e => setEditType(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
               </div>
-
-              {/* Message */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-foreground">Message / Remarks</label>
-                <textarea
-                  rows={3}
-                  value={editMsg}
-                  onChange={e => setEditMsg(e.target.value)}
+                <textarea rows={3} value={editMsg} onChange={e => setEditMsg(e.target.value)}
                   placeholder="Optional message to signatories..."
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none transition"
-                />
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none transition" />
               </div>
-
-              {/* File re-upload */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-foreground">
                   Replace PDF <span className="text-muted-foreground font-normal">(optional)</span>
@@ -834,15 +855,12 @@ const MyDocuments = () => {
                     onChange={e => setEditFile(e.target.files?.[0] ?? null)} />
                 </label>
               </div>
-
               {editError && (
                 <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/30 text-destructive text-sm rounded-lg px-3 py-2.5">
                   <AlertTriangle className="w-4 h-4 shrink-0" /><span>{editError}</span>
                 </div>
               )}
             </div>
-
-            {/* Footer */}
             <div className="flex gap-3 px-6 py-4 border-t border-border">
               <button onClick={() => setEditDoc(null)}
                 className="flex-1 py-2.5 rounded-lg border border-border text-sm text-muted-foreground hover:bg-accent transition">
