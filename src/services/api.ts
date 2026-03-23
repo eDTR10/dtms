@@ -174,6 +174,8 @@ export const userApi = {
     api.put<UserProfile>(`users/update/${id}/`, data).then(r => r.data),
   create: (data: Partial<UserProfile> & { password: string; re_password: string }) =>
     api.post<UserProfile>("users/", data).then(r => r.data),
+  patchMe: (data: Partial<UserProfile>) =>
+    api.patch<UserProfile>("users/me/", data).then(r => r.data),
 };
 
 // ── Document Templates ────────────────────────────────────────────────────────

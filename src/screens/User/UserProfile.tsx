@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Save, CheckCircle2 } from "lucide-react";
 import UserLayout from "./UserLayout";
 import { useAuth } from "../Auth/AuthContext";
+import { userApi } from "../../services/api";
 
 const ACC_LEVEL_LABELS: Record<number, string> = {
   0: "Super Admin",
@@ -12,13 +13,29 @@ const ACC_LEVEL_LABELS: Record<number, string> = {
 };
 
 const UserProfile = () => {
-  const { user } = useAuth();
-  const [saved, setSaved] = useState(false);
 
-  const handleSave = () => {
-    // TODO: call PATCH /auth/users/me/ with updated data
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  const { user, setUser }:any = useAuth();
+  const [saved, setSaved] = useState(false);
+  const [form, setForm] = useState({
+    first_name: user?.first_name || "",
+    last_name: user?.last_name || "",
+    email: user?.email || "",
+    position: user?.position || "",
+  });
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
+
+  const handleSave = async () => {
+    try {
+      const updated = await userApi.patchMe(form);
+      setUser && setUser(updated); // update context if possible
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      // Optionally show error
+    }
   };
 
   return (
@@ -40,18 +57,46 @@ const UserProfile = () => {
           </div>
 
           <div className="grid grid-cols-2 gap-5 sm:grid-cols-1">
-            {[
-              { label: "First Name",  value: user?.first_name },
-              { label: "Last Name",   value: user?.last_name },
-              { label: "Email",       value: user?.email },
-              { label: "Position",    value: user?.position },
-            ].map(f => (
-              <div key={f.label} className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-foreground">{f.label}</label>
-                <input defaultValue={f.value ?? ""}
-                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-              </div>
-            ))}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-foreground">First Name</label>
+              <input
+                name="first_name"
+                type="text"
+                value={form.first_name}
+                onChange={handleChange}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-foreground">Last Name</label>
+              <input
+                name="last_name"
+                type="text"
+                value={form.last_name}
+                onChange={handleChange}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-foreground">Email</label>
+              <input
+                name="email"
+                type="email"
+                value={form.email}
+                onChange={handleChange}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-foreground">Position</label>
+              <input
+                name="position"
+                type="text"
+                value={form.position}
+                onChange={handleChange}
+                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+              />
+            </div>
           </div>
 
           <button onClick={handleSave}

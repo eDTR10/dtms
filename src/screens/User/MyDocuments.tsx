@@ -19,10 +19,20 @@ const statusLabel = (doc: Document, currentUserId?: number): string => {
   const signed   = sigs.filter(s => s.status === "signed").length;
   const rejected = sigs.filter(s => s.status === "rejected").length;
   const isOwner  = doc.userID === currentUserId;
-  if (doc.status === "Pending")     return "For Sending";
-  if (doc.status === "For Signing") return `For Signing (${signed}/${total})`;
-  if (doc.status === "Completed")   return isOwner ? `Completed (${signed}/${total})` : "Signed";
-  if (doc.status === "Rejected")    return `Rejected (${rejected}/${total})`;
+  const isSignatory = sigs.some(s => s.user_id === currentUserId);
+  const hasSigned = sigs.some(s => s.user_id === currentUserId && s.status === "signed");
+
+  if (doc.status === "Pending") return "For Sending";
+  if (doc.status === "For Signing") {
+    if (isSignatory && hasSigned) return `Signed (${signed}/${total})`;
+    return `For Signing (${signed}/${total})`;
+  }
+  if (doc.status === "Completed") {
+    if (isOwner) return `Completed (${signed}/${total})`;
+    if (isSignatory && hasSigned) return `Signed (${signed}/${total})`;
+    return `Signed (${signed}/${total})`;
+  }
+  if (doc.status === "Rejected") return `Rejected (${rejected}/${total})`;
   return doc.status;
 };
 
@@ -241,13 +251,30 @@ const MyDocuments = () => {
       d.tracknumber.toLowerCase().includes(q) ||
       (d.type ?? "").toLowerCase().includes(q) ||
       (d.requestor ?? "").toLowerCase().includes(q);
-    const matchFilter =
-      filter === "All" ||
-      (filter === "For Sending" ? d.status === "Pending" :
-       filter === "Completed"  ? d.status === "Completed" && d.userID === user?.id :
-       filter === "Signed"     ? d.status === "Completed" && d.userID !== user?.id :
-       d.status === filter);
-    const matchType   = typeFilter === "All" || d.type === typeFilter;
+
+    let matchFilter = false;
+    if (filter === "All") {
+      matchFilter = true;
+    } else if (filter === "For Sending") {
+      matchFilter = d.status === "Pending";
+    } else if (filter === "For Signing") {
+      // Only show docs that are 'For Signing' and the user is a signatory who has NOT signed
+      const isSignatory = d.signatories?.some(s => s.user_id === user?.id);
+      const hasSigned = d.signatories?.some(s => s.user_id === user?.id && s.status === "signed");
+      matchFilter = d.status === "For Signing" && isSignatory && !hasSigned;
+    } else if (filter === "Completed") {
+      matchFilter = d.status === "Completed" && d.userID === user?.id;
+    } else if (filter === "Signed") {
+      // Show docs where user is a signatory (not owner) and has signed
+      const isSignatory = d.signatories?.some(s => s.user_id === user?.id);
+      const hasSigned = d.signatories?.some(s => s.user_id === user?.id && s.status === "signed");
+      matchFilter = !!(d.status === "Completed" && d.userID !== user?.id && isSignatory && hasSigned) ||
+                   !!(d.status === "For Signing" && isSignatory && hasSigned);
+    } else if (filter === "Rejected") {
+      matchFilter = d.status === "Rejected";
+    }
+
+    const matchType = typeFilter === "All" || d.type === typeFilter;
     return matchSearch && matchFilter && matchType;
   });
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, useRef, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Upload, FileText, ChevronDown, ChevronUp, AlertTriangle, User, Briefcase,
@@ -51,8 +51,41 @@ const CreateDocument = () => {
     template: "",
   });
   const [files,    setFiles]    = useState<File[]>([]);
+  const [draggedFileIdx, setDraggedFileIdx] = useState<number | null>(null);
+
+  // Move file up or down in the list
+  const moveFile = (index: number, direction: 'up' | 'down') => {
+    setFiles(prev => {
+      const arr = [...prev];
+      const target = direction === 'up' ? index - 1 : index + 1;
+      if (target < 0 || target >= arr.length) return arr;
+      const [file] = arr.splice(index, 1);
+      arr.splice(target, 0, file);
+      return arr;
+    });
+  };
+
+  // Drag-and-drop handlers for file reordering
+  const handleFileDragStart = (idx: number) => {
+    setDraggedFileIdx(idx);
+  };
+  const handleFileDragOver = (idx: number, e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (draggedFileIdx === null || draggedFileIdx === idx) return;
+    setFiles(prev => {
+      const arr = [...prev];
+      const [file] = arr.splice(draggedFileIdx, 1);
+      arr.splice(idx, 0, file);
+      return arr;
+    });
+    setDraggedFileIdx(idx);
+  };
+  const handleFileDragEnd = () => {
+    setDraggedFileIdx(null);
+  };
   const [dragging, setDragging] = useState(false);
   const [error,    setError]    = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Signatory routing state ───────────────────────────────────────────────
   const [signatories,  setSignatories]  = useState<SignatoryEntry[]>([]);
@@ -168,13 +201,33 @@ const CreateDocument = () => {
     setSignatories(prev => {
       const targetIndex = direction === "up" ? index - 1 : index + 1;
       if (targetIndex < 0 || targetIndex >= prev.length) return prev;
-
       const updated = prev.map(s => ({ ...s }));
       const [moved] = updated.splice(index, 1);
       updated.splice(targetIndex, 0, moved);
       return normalizeSignatoryOrders(updated);
     });
     setFromTemplate(false);
+  };
+
+  // Drag-and-drop for signatories
+  const [draggedSigIdx, setDraggedSigIdx] = useState<number | null>(null);
+  const handleSigDragStart = (idx: number) => {
+    setDraggedSigIdx(idx);
+  };
+  const handleSigDragOver = (idx: number, e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (draggedSigIdx === null || draggedSigIdx === idx) return;
+    setSignatories(prev => {
+      const arr = [...prev];
+      const [dragged] = arr.splice(draggedSigIdx, 1);
+      arr.splice(idx, 0, dragged);
+      // Do NOT change order property; only reorder visually
+      return arr;
+    });
+    setDraggedSigIdx(idx);
+  };
+  const handleSigDragEnd = () => {
+    setDraggedSigIdx(null);
   };
 
   const handleOfficeChange = (val: string) => {
@@ -240,7 +293,9 @@ const CreateDocument = () => {
 
       // If signatories assigned → immediately route the document
       if (signatories.length > 0) {
-        await documentApi.send(doc.id, { signatories });
+        // Normalize signatory orders before sending
+        const normalizedSignatories = normalizeSignatoryOrders(signatories);
+        await documentApi.send(doc.id, { signatories: normalizedSignatories });
       }
 
       navigate(`/dtms/user/documents`);
@@ -274,18 +329,7 @@ const CreateDocument = () => {
               {/* Document Info */}
               <div className="bg-card border border-border rounded-2xl p-5 flex flex-col gap-4">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Document Info</p>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />
-                    Title <span className="text-destructive">*</span>
-                  </label>
-                  <input name="title" value={form.title} onChange={handleChange}
-                    placeholder="e.g. Request for Budget Approval"
-                    className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
+   <div className="flex flex-col gap-1.5">
                     <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       <FileText className="w-3.5 h-3.5 text-muted-foreground" />
                       Template <span className="text-muted-foreground font-normal text-xs">(optional)</span>
@@ -299,6 +343,17 @@ const CreateDocument = () => {
                       <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                     </div>
                   </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />
+                    Title <span className="text-destructive">*</span>
+                  </label>
+                  <input name="title" value={form.title} onChange={handleChange}
+                    placeholder="e.g. Request for Budget Approval"
+                    className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+                </div>
+
+             
 
                 {/* Template link + instruction */}
                 {(() => {
@@ -370,60 +425,102 @@ const CreateDocument = () => {
                     <Upload className="w-3.5 h-3.5 text-muted-foreground" />
                     Attach PDFs <span className="text-destructive">*</span>
                   </label>
-                  {files.length > 0 ? (
-                    <div className="flex flex-col gap-2">
-                      {files.map((f, idx) => (
-                        <div key={idx} className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 px-4 py-3">
-                          <FileText className="w-4 h-4 text-primary shrink-0" />
-                          <span className="text-sm text-foreground truncate flex-1">{f.name}</span>
-                          <button type="button" onClick={() => setFiles(prev => prev.filter((_, i) => i !== idx))}
-                            className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition">
-                            <X className="w-4 h-4" />
-                          </button>
+                  <>
+                    {files.length > 0 ? (
+                      <div className="flex flex-col gap-2">
+                        {files.map((f, idx) => (
+                          <div
+                            key={idx}
+                            className={`flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 px-4 py-3 ${draggedFileIdx === idx ? 'opacity-60' : ''}`}
+                            draggable
+                            onDragStart={() => handleFileDragStart(idx)}
+                            onDragOver={e => handleFileDragOver(idx, e)}
+                            onDragEnd={handleFileDragEnd}
+                            onDrop={handleFileDragEnd}
+                            style={{ cursor: 'move' }}
+                          >
+                            <FileText className="w-4 h-4 text-primary shrink-0" />
+                            <span className="text-sm text-foreground truncate flex-1">{f.name}</span>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                title="Move up"
+                                onClick={() => moveFile(idx, 'up')}
+                                disabled={idx === 0}
+                                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-background transition disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                <ChevronUp className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Move down"
+                                onClick={() => moveFile(idx, 'down')}
+                                disabled={idx === files.length - 1}
+                                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-background transition disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                <ChevronDown className="w-4 h-4" />
+                              </button>
+                              <button type="button" onClick={() => setFiles(prev => prev.filter((_, i) => i !== idx))}
+                                className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+                                title="Remove file"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="flex items-center justify-center gap-2 rounded-lg border border-border bg-accent/50 px-4 py-3 text-sm font-medium text-foreground hover:bg-accent transition"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Add more files
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        className={`flex flex-col items-center gap-2 rounded-xl border-2 border-dashed bg-background px-4 py-8 cursor-pointer transition group ${
+                          dragging
+                            ? "border-primary bg-primary/5 scale-[1.01]"
+                            : "border-border hover:border-primary/50 hover:bg-accent/30"
+                        }`}
+                        onClick={() => fileInputRef.current?.click()}
+                        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                        onDragEnter={e => { e.preventDefault(); setDragging(true); }}
+                        onDragLeave={() => setDragging(false)}
+                        onDrop={e => {
+                          e.preventDefault();
+                          setDragging(false);
+                          const dropped = Array.from(e.dataTransfer.files || []).filter(f => f.type === "application/pdf");
+                          if (dropped.length > 0) setFiles(prev => [...prev, ...dropped]);
+                        }}
+                      >
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition ${dragging ? "bg-primary/20" : "bg-accent group-hover:bg-primary/10"}`}>
+                          <Upload className={`w-5 h-5 transition ${dragging ? "text-primary" : "text-muted-foreground group-hover:text-primary"}`} />
                         </div>
-                      ))}
-                      <button type="button" onClick={() => {
-                        const input = document.querySelector('input[name="file-upload"]') as HTMLInputElement;
-                        input?.click();
-                      }}
-                        className="flex items-center justify-center gap-2 rounded-lg border border-border bg-accent/50 px-4 py-3 text-sm font-medium text-foreground hover:bg-accent transition">
-                        <Plus className="w-4 h-4" />
-                        Add more files
-                      </button>
-                    </div>
-                  ) : (
-                    <label
-                      className={`flex flex-col items-center gap-2 rounded-xl border-2 border-dashed bg-background px-4 py-8 cursor-pointer transition group ${
-                        dragging
-                          ? "border-primary bg-primary/5 scale-[1.01]"
-                          : "border-border hover:border-primary/50 hover:bg-accent/30"
-                      }`}
-                      onDragOver={e => { e.preventDefault(); setDragging(true); }}
-                      onDragEnter={e => { e.preventDefault(); setDragging(true); }}
-                      onDragLeave={() => setDragging(false)}
-                      onDrop={e => {
-                        e.preventDefault();
-                        setDragging(false);
-                        const dropped = Array.from(e.dataTransfer.files || []).filter(f => f.type === "application/pdf");
-                        if (dropped.length > 0) setFiles(prev => [...prev, ...dropped]);
-                      }}
-                    >
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition ${dragging ? "bg-primary/20" : "bg-accent group-hover:bg-primary/10"}`}>
-                        <Upload className={`w-5 h-5 transition ${dragging ? "text-primary" : "text-muted-foreground group-hover:text-primary"}`} />
+                        <div className="text-center">
+                          <p className="text-sm font-medium text-foreground">
+                            {dragging ? "Drop your PDFs here" : "Drag & drop or click to upload"}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">PDF files only (multiple allowed)</p>
+                        </div>
                       </div>
-                      <div className="text-center">
-                        <p className="text-sm font-medium text-foreground">
-                          {dragging ? "Drop your PDFs here" : "Drag & drop or click to upload"}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-0.5">PDF files only (multiple allowed)</p>
-                      </div>
-                      <input type="file" name="file-upload" accept=".pdf" multiple className="hidden"
-                        onChange={e => {
-                          const newFiles = Array.from(e.target.files || []).filter(f => f.type === "application/pdf");
-                          setFiles(prev => [...prev, ...newFiles]);
-                        }} />
-                    </label>
-                  )}
+                    )}
+                    {/* Always render the hidden file input so the button can trigger it */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      name="file-upload"
+                      accept=".pdf"
+                      multiple
+                      className="hidden"
+                      onChange={e => {
+                        const newFiles = Array.from(e.target.files || []).filter(f => f.type === "application/pdf");
+                        setFiles(prev => [...prev, ...newFiles]);
+                      }}
+                    />
+                  </>
                 </div>
               </div>
 
@@ -470,9 +567,17 @@ const CreateDocument = () => {
                                 </button>
                               </div>
                             )}
-                            <div className={`flex items-center gap-3 rounded-lg px-4 py-2.5 ${
-                              isParallelWithAbove ? "bg-blue-500/5 border border-blue-500/20" : "bg-accent/50"
-                            }`}>
+                            <div
+                              className={`flex items-center gap-3 rounded-lg px-4 py-2.5 ${
+                                isParallelWithAbove ? "bg-blue-500/5 border border-blue-500/20" : "bg-accent/50"
+                              } ${draggedSigIdx === i ? 'opacity-60' : ''}`}
+                              draggable
+                              onDragStart={() => handleSigDragStart(i)}
+                              onDragOver={e => handleSigDragOver(i, e)}
+                              onDragEnd={handleSigDragEnd}
+                              onDrop={handleSigDragEnd}
+                              style={{ cursor: 'move' }}
+                            >
                               <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${
                                 isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
                               }`}>{stepNum(s.order)}</span>

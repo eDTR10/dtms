@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Search, FileText, Eye, Download, Loader2,
@@ -33,6 +33,8 @@ const DocumentPage = () => {
   const [page,        setPage]        = useState(1);
   const [downloading, setDownloading] = useState<number | null>(null);
 
+  // Prevent double fetch in React 18 StrictMode
+  const didFetch = useRef(false);
   const fetchDocs = async (showSpinner = false) => {
     if (showSpinner) setRefreshing(true);
     try {
@@ -46,7 +48,12 @@ const DocumentPage = () => {
     }
   };
 
-  useEffect(() => { fetchDocs(); }, []);
+  useEffect(() => {
+    if (!didFetch.current) {
+      fetchDocs();
+      didFetch.current = true;
+    }
+  }, []);
   useEffect(() => { setPage(1); }, [search, filter]);
 
   const statuses = ["All", "For Sending", "For Signing", "Completed", "Rejected"];

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FileText, Users, Building2, LayoutTemplate,
@@ -58,7 +58,14 @@ const Dashboard = () => {
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  // Prevent double fetch in React 18 StrictMode
+  const didFetch = useRef(false);
+  useEffect(() => {
+    if (!didFetch.current) {
+      fetchAll();
+      didFetch.current = true;
+    }
+  }, []);
 
   // ── derived stats ──────────────────────────────────────────────────────────
   const total       = docs.length;
