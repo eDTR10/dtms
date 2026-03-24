@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Search, Plus, Pencil, Trash2, X, CheckCircle2,
-  GitBranch, ChevronDown, ChevronUp, ArrowUpDown, Link2, Link2Off,
+  GitBranch, ChevronDown, Link2, Link2Off, GripVertical,
 } from "lucide-react";
 import AdminLayout from "./AdminLayout";
 import {
@@ -11,7 +11,7 @@ import {
 } from "../../services/api";
 import { TableSkeleton } from "./Skeleton";
 
-// ── Details modal (name + description) ────────────────────────────────────────
+// ── Details modal ─────────────────────────────────────────────────────────────
 const DetailsModal = ({
   initial,
   onSave,
@@ -93,7 +93,61 @@ const DetailsModal = ({
   );
 };
 
-// ── Routing modal ──────────────────────────────────────────────────────────────
+// ── reorderSteps ──────────────────────────────────────────────────────────────
+// Moves the step at fromIdx (and any parallel siblings) to the position of
+// toIdx, preserving all other parallel groupings.
+// Returns a new array with order values renumbered 0, 1, 2, ...
+function reorderSteps(
+  steps: TemplateRouting[],
+  fromIdx: number,
+  toIdx: number,
+): TemplateRouting[] {
+  if (fromIdx === toIdx) return steps;
+
+  // 1. Group consecutive same-order rows into "slots".
+  const slots: TemplateRouting[][] = [];
+  for (const s of steps) {
+    const last = slots[slots.length - 1];
+    if (last && last[0].order === s.order) {
+      last.push(s);
+    } else {
+      slots.push([s]);
+    }
+  }
+
+  // 2. Build flat-row-index -> slot-index map.
+  const rowToSlot: number[] = [];
+  slots.forEach((slot, si) => slot.forEach(() => rowToSlot.push(si)));
+
+  const fromSlot = rowToSlot[fromIdx];
+  const toSlot   = rowToSlot[toIdx];
+
+  // Same slot = no move needed.
+  if (fromSlot === toSlot) return steps;
+
+  // 3. Remove the dragged slot.
+  const rest = slots.filter((_, i) => i !== fromSlot);
+
+  // After removing fromSlot, all indices above it shift down by 1.
+  const adjustedTo = toSlot > fromSlot ? toSlot - 1 : toSlot;
+
+  // Insert before or after the target slot.
+  const insertAt = toIdx > fromIdx
+    ? adjustedTo + 1  // dragged downward: place after target slot
+    : adjustedTo;     // dragged upward:   place before target slot
+
+  rest.splice(Math.max(0, Math.min(insertAt, rest.length)), 0, slots[fromSlot]);
+
+  // 4. Renumber: each slot gets its index as the order value.
+  const result: TemplateRouting[] = [];
+  rest.forEach((slot, slotIdx) => {
+    slot.forEach(s => result.push({ ...s, order: slotIdx }));
+  });
+
+  return result;
+}
+
+// ── Routing modal ─────────────────────────────────────────────────────────────
 const RoutingModal = ({
   template,
   onClose,
@@ -101,14 +155,18 @@ const RoutingModal = ({
   template: DocumentTemplate;
   onClose: () => void;
 }) => {
-  const [steps, setSteps]       = useState<TemplateRouting[]>(template.routing ?? []);
-  const [offices, setOffices]   = useState<Office[]>([]);
-  const [allUsers, setAllUsers] = useState<SignatoryUser[]>([]);
+  const [steps, setSteps]             = useState<TemplateRouting[]>(template.routing ?? []);
+  const [offices, setOffices]         = useState<Office[]>([]);
+  const [allUsers, setAllUsers]       = useState<SignatoryUser[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(true);
+  const [addOffice, setAddOffice]     = useState<string>("");
+  const [addUser, setAddUser]         = useState<string>("");
+  const [adding, setAdding]           = useState(false);
+  const [saving, setSaving]           = useState(false);
 
-  const [addOffice, setAddOffice] = useState<string>("");
-  const [addUser,   setAddUser]   = useState<string>("");
-  const [adding,    setAdding]    = useState(false);
+  // Visual-only drag state. The actual fromIdx travels in dataTransfer.
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -154,36 +212,12 @@ const RoutingModal = ({
     setSteps(prev => prev.filter(s => s.id !== step.id));
   };
 
-  const move = async (index: number, direction: -1 | 1) => {
-    const target = index + direction;
-    if (target < 0 || target >= steps.length) return;
-    const next   = steps.map(s => ({ ...s }));
-    const orderA = next[index].order;
-    const orderB = next[target].order;
-    if (orderA === orderB) {
-      // Same group: just swap display positions, no DB change needed
-      [next[index], next[target]] = [next[target], next[index]];
-      setSteps(next);
-      return;
-    }
-    // Different groups: swap order values between the two items
-    next[index].order  = orderB;
-    next[target].order = orderA;
-    next.sort((a, b) => a.order !== b.order ? a.order - b.order : 0);
-    setSteps(next);
-    await Promise.all([
-      templateRoutingApi.reorder(template.id, steps[index].id,  orderB),
-      templateRoutingApi.reorder(template.id, steps[target].id, orderA),
-    ]);
-  };
-
   const toggleParallel = async (index: number) => {
     const next  = steps.map(s => ({ ...s }));
     const above = next[index - 1];
     const curr  = next[index];
     const updates: { id: number; order: number }[] = [];
     if (curr.order === above.order) {
-      // Split: bump curr and everything after with >= curr.order
       for (let j = index; j < next.length; j++) {
         if (next[j].order >= curr.order) {
           next[j].order += 1;
@@ -191,7 +225,6 @@ const RoutingModal = ({
         }
       }
     } else {
-      // Merge: pull curr (and same-order siblings) down to above's order
       const diff = curr.order - above.order;
       for (let j = index; j < next.length; j++) {
         next[j].order -= diff;
@@ -202,13 +235,88 @@ const RoutingModal = ({
     await Promise.all(updates.map(u => templateRoutingApi.reorder(template.id, u.id, u.order)));
   };
 
+  // ── Drag handlers ────────────────────────────────────────────────────────
+  // fromIdx is carried in dataTransfer so it survives across event boundaries.
+  // onDragEnd fires after onDrop in all major browsers, so we must NOT rely on
+  // a ref that onDragEnd clears before onDrop reads it.
+
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, idx: number) => {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(idx));
+    setDraggingIdx(idx);
+    // Off-screen ghost so the browser does not render a default copy.
+    const ghost = document.createElement("div");
+    ghost.style.cssText = "position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;";
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    requestAnimationFrame(() => ghost.remove());
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, idx: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverIdx !== idx) setDragOverIdx(idx);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingIdx(null);
+    setDragOverIdx(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>, toIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Read fromIdx from the payload — always available here even if
+    // handleDragEnd already fired.
+    const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+
+    setDraggingIdx(null);
+    setDragOverIdx(null);
+
+    if (isNaN(fromIdx) || fromIdx === toIdx) return;
+
+    const prevSteps = steps;
+    const newSteps  = reorderSteps(steps, fromIdx, toIdx);
+
+    // reorderSteps returns the original reference when nothing changed.
+    if (newSteps === prevSteps) return;
+
+    // Optimistic UI update.
+    setSteps(newSteps);
+
+    // Persist only the steps whose order value actually changed.
+    setSaving(true);
+    try {
+      const prevMap = new Map(prevSteps.map(s => [s.id, s.order]));
+      const changed = newSteps.filter(s => s.order !== prevMap.get(s.id));
+      await Promise.all(
+        changed.map(s => templateRoutingApi.reorder(template.id, s.id, s.order))
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Derived display helpers.
+  const uniqueOrders     = [...new Set(steps.map(s => s.order))].sort((a, b) => a - b);
+  const stepNum = (order: number) => uniqueOrders.indexOf(order) + 1;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
           <div>
-            <h2 className="text-base font-semibold text-foreground">Routing Steps</h2>
+            <h2 className="text-base font-semibold text-foreground">
+              Routing Steps
+              {saving && (
+                <span className="ml-2 text-xs text-muted-foreground font-normal animate-pulse">
+                  Saving...
+                </span>
+              )}
+            </h2>
             <p className="text-xs text-muted-foreground mt-0.5">{template.name}</p>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
@@ -220,23 +328,28 @@ const RoutingModal = ({
         <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-0">
           {steps.length === 0 ? (
             <div className="text-center py-10">
-              <ArrowUpDown className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
+              <GitBranch className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No routing steps yet.</p>
               <p className="text-xs text-muted-foreground mt-1">Add steps below to define the signing queue.</p>
             </div>
-          ) : (() => {
-            const sortedUniqueOrders = [...new Set(steps.map(s => s.order))].sort((a, b) => a - b);
-            const stepNum = (order: number) => sortedUniqueOrders.indexOf(order) + 1;
-            return steps.map((step, i) => {
+          ) : (
+            steps.map((step, i) => {
               const isParallelWithAbove = i > 0 && step.order === steps[i - 1].order;
+              const isBeingDragged      = draggingIdx === i;
+              const isDropTarget        = dragOverIdx === i && draggingIdx !== i;
+
               return (
                 <div key={step.id}>
-                  {/* Parallel connector between rows */}
+                  {/* Parallel / sequential pill between rows */}
                   {i > 0 && (
                     <div className="flex items-center justify-center h-6">
                       <button
                         type="button"
-                        title={isParallelWithAbove ? "Click to sign separately (after above)" : "Click to sign at the same time as above"}
+                        title={
+                          isParallelWithAbove
+                            ? "Click to sign separately (after above)"
+                            : "Click to sign at the same time as above"
+                        }
                         onClick={() => toggleParallel(i)}
                         className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
                           isParallelWithAbove
@@ -246,52 +359,63 @@ const RoutingModal = ({
                       >
                         {isParallelWithAbove
                           ? <><Link2 className="w-3 h-3" /> parallel &mdash; click to separate</>
-                          : <><Link2Off className="w-3 h-3" /> sequential &mdash; click to parallelize</>}
+                          : <><Link2Off className="w-3 h-3" /> sequential &mdash; click to parallelize</>
+                        }
                       </button>
                     </div>
                   )}
-                  <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
-                    isParallelWithAbove
-                      ? "border-blue-500/30 bg-blue-500/5"
-                      : "border-border bg-background"
-                  }`}>
+
+                  {/* Step row */}
+                  <div
+                    draggable
+                    onDragStart={e => handleDragStart(e, i)}
+                    onDragOver={e  => handleDragOver(e, i)}
+                    onDragEnd={handleDragEnd}
+                    onDrop={e => handleDrop(e, i)}
+                    className={[
+                      "flex items-center gap-3 rounded-xl border px-4 py-3 transition-all select-none",
+                      isBeingDragged
+                        ? "opacity-30 scale-[0.98] border-dashed border-primary/50 bg-primary/5"
+                        : isDropTarget
+                          ? "border-primary bg-primary/10 shadow-md scale-[1.01]"
+                          : isParallelWithAbove
+                            ? "border-blue-500/30 bg-blue-500/5"
+                            : "border-border bg-background",
+                    ].join(" ")}
+                  >
+                    <GripVertical className="w-4 h-4 text-muted-foreground/40 shrink-0 cursor-grab active:cursor-grabbing" />
+
                     <div className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
                       isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary/10 text-primary"
                     }`}>
                       {stepNum(step.order)}
                     </div>
+
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{step.user_name}</p>
                       <p className="text-xs text-muted-foreground truncate">
                         {step.office_name}{step.user_position ? ` · ${step.user_position}` : ""}
                       </p>
                     </div>
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      <button onClick={() => move(i, -1)} disabled={i === 0}
-                        className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition">
-                        <ChevronUp className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => move(i, 1)} disabled={i === steps.length - 1}
-                        className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 transition">
-                        <ChevronDown className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => handleRemove(step)}
-                        className="p-1 rounded text-muted-foreground hover:text-destructive transition">
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
+
+                    <button
+                      onClick={() => handleRemove(step)}
+                      className="p-1 rounded text-muted-foreground hover:text-destructive transition shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
               );
-            });
-          })()}
+            })
+          )}
         </div>
 
         {/* Add step form */}
         <div className="px-6 pb-5 pt-3 border-t border-border shrink-0">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Add a Step</p>
           {loadingMeta ? (
-            <p className="text-xs text-muted-foreground">Loading offices &amp; users…</p>
+            <p className="text-xs text-muted-foreground">Loading offices &amp; users...</p>
           ) : (
             <div className="flex flex-col gap-2">
               <div className="relative">
@@ -299,7 +423,7 @@ const RoutingModal = ({
                   value={addOffice}
                   onChange={e => { setAddOffice(e.target.value); setAddUser(""); }}
                   className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition">
-                  <option value="">— Select office —</option>
+                  <option value="">Select office</option>
                   {offices.map(o => (
                     <option key={o.officeID} value={o.officeID}>{o.name}</option>
                   ))}
@@ -312,7 +436,7 @@ const RoutingModal = ({
                   onChange={e => setAddUser(e.target.value)}
                   disabled={!addOffice}
                   className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition disabled:opacity-50">
-                  <option value="">— Select signatory —</option>
+                  <option value="">Select signatory</option>
                   {usersForOffice.map(u => (
                     <option key={u.id} value={u.id}>
                       {u.first_name} {u.last_name}{u.position ? ` (${u.position})` : ""}
@@ -325,7 +449,7 @@ const RoutingModal = ({
                 onClick={handleAdd}
                 disabled={!addUser || !addOffice || adding}
                 className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-50">
-                {adding ? "Adding…" : `+ Add Step ${new Set(steps.map(s => s.order)).size + 1}`}
+                {adding ? "Adding..." : `+ Add Step ${new Set(steps.map(s => s.order)).size + 1}`}
               </button>
             </div>
           )}

@@ -206,7 +206,16 @@ export const templateRoutingApi = {
 // ── Documents ─────────────────────────────────────────────────────────────────
 
 export const documentApi = {
-  list:       (signal?: AbortSignal) => api.get<Document[]>("document/all/", { signal }).then(r => r.data),
+  list:       (signal?: AbortSignal) => api.get<Document[]>("document/all/", 
+    
+    
+    
+     
+     
+     
+    
+    
+    { signal }).then(r => r.data),
   myDocs:     (signal?: AbortSignal) => api.get<Document[]>("document/by_office/", { signal }).then(r => r.data),
   get:        (id: number, signal?: AbortSignal) => api.get<Document>(`document/${id}`, { signal }).then(r => r.data),
   getByTrack: (tracknumber: string, signal?: AbortSignal) =>

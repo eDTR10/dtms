@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { Search, Plus, Pencil, X, ChevronDown } from "lucide-react";
+import { Search, Plus, Pencil, X, ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import AdminLayout from "./AdminLayout";
 import { TableSkeleton } from "./Skeleton";
 import { userApi, officeApi, UserProfile, Office } from "../../services/api";
+
+const DEFAULT_PASSWORD = "@user322w";
 
 const ACC_LEVELS: Array<{ value: number; label: string }> = [
   { value: 0, label: "Super Admin" },
@@ -11,6 +13,10 @@ const ACC_LEVELS: Array<{ value: number; label: string }> = [
   { value: 3, label: "Signatory" },
   { value: 4, label: "Staff" },
 ];
+
+// ── Sort helpers ──────────────────────────────────────────────────────────────
+type SortKey = "name" | "office" | "acc_lvl" | "is_active";
+type SortDir = "asc" | "desc";
 
 // ── User Modal ────────────────────────────────────────────────────────────────
 const UserModal = ({
@@ -24,6 +30,7 @@ const UserModal = ({
   onSave: (data: any) => Promise<void>;
   onClose: () => void;
 }) => {
+  const isEdit = !!initial;
   const [form, setForm] = useState({
     first_name: initial?.first_name ?? "",
     last_name:  initial?.last_name  ?? "",
@@ -32,8 +39,8 @@ const UserModal = ({
     office:     String(initial?.office ?? ""),
     acc_lvl:    String(initial?.acc_lvl ?? 4),
     is_active:  initial?.is_active  ?? true,
-    password:   "",
-    re_password:"",
+    password:   isEdit ? "" : DEFAULT_PASSWORD,
+    re_password: isEdit ? "" : DEFAULT_PASSWORD,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
@@ -49,7 +56,7 @@ const UserModal = ({
       setError("First name, last name and email are required.");
       return;
     }
-    if (!initial && (!form.password || form.password !== form.re_password)) {
+    if (!isEdit && (!form.password || form.password !== form.re_password)) {
       setError("Passwords do not match.");
       return;
     }
@@ -82,7 +89,7 @@ const UserModal = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
       <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-lg p-6 overflow-y-auto max-h-[90vh]">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-foreground">{initial ? "Edit User" : "Add User"}</h2>
+          <h2 className="text-base font-semibold text-foreground">{isEdit ? "Edit User" : "Add User"}</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
         </div>
 
@@ -130,11 +137,14 @@ const UserModal = ({
             </div>
           </div>
 
-          {/* Password (required for create) */}
+          {/* Password */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-foreground">Password {initial && <span className="text-muted-foreground font-normal">(leave blank to keep)</span>}</label>
+            <label className="text-sm font-medium text-foreground">
+              Password{" "}
+              {isEdit && <span className="text-muted-foreground font-normal">(leave blank to keep)</span>}
+            </label>
             <input name="password" type="password" value={form.password} onChange={change}
-              placeholder={initial ? "Leave blank to keep current" : "Password"}
+              placeholder={isEdit ? "Leave blank to keep current" : "Password"}
               className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
           </div>
           <div className="flex flex-col gap-1.5">
@@ -168,6 +178,14 @@ const UserModal = ({
 
 const ACC_LABEL_MAP: Record<number, string> = Object.fromEntries(ACC_LEVELS.map(l => [l.value, l.label]));
 
+// ── Sort icon ─────────────────────────────────────────────────────────────────
+const SortIcon = ({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) => {
+  if (col !== sortKey) return <ChevronsUpDown className="w-3 h-3 ml-1 opacity-40" />;
+  return sortDir === "asc"
+    ? <ChevronUp className="w-3 h-3 ml-1" />
+    : <ChevronDown className="w-3 h-3 ml-1" />;
+};
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 const UserPage = () => {
   const [users, setUsers]       = useState<UserProfile[]>([]);
@@ -175,6 +193,10 @@ const UserPage = () => {
   const [loading, setLoading]   = useState(true);
   const [search, setSearch]     = useState("");
   const [modal, setModal]       = useState<{ open: boolean; item?: UserProfile }>({ open: false });
+  const [sortKey, setSortKey]   = useState<SortKey>("name");
+  const [sortDir, setSortDir]   = useState<SortDir>("asc");
+  const [filterOffice, setFilterOffice]   = useState<string>("");
+  const [filterAccLvl, setFilterAccLvl]   = useState<string>("");
 
   const load = (signal?: AbortSignal) => {
     setLoading(true);
@@ -199,12 +221,54 @@ const UserPage = () => {
     load();
   };
 
-  const filtered = users.filter(u =>
-    `${u.first_name} ${u.last_name}`.toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
-  );
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
 
   const officeMap = Object.fromEntries(offices.map(o => [o.officeID, o.name]));
+
+  const activeFilterCount = [filterOffice, filterAccLvl].filter(Boolean).length;
+
+  const filtered = users
+    .filter(u => {
+      const matchesSearch =
+        `${u.first_name} ${u.last_name}`.toLowerCase().includes(search.toLowerCase()) ||
+        u.email.toLowerCase().includes(search.toLowerCase());
+      const matchesOffice  = filterOffice  === "" || String(u.office)  === filterOffice;
+      const matchesAccLvl  = filterAccLvl  === "" || String(u.acc_lvl) === filterAccLvl;
+      return matchesSearch && matchesOffice && matchesAccLvl;
+    })
+    .sort((a, b) => {
+      let valA: string | number = "";
+      let valB: string | number = "";
+
+      if (sortKey === "name") {
+        valA = `${a.first_name} ${a.last_name}`.toLowerCase();
+        valB = `${b.first_name} ${b.last_name}`.toLowerCase();
+      } else if (sortKey === "office") {
+        const officeA = a.office ?? '';
+        const officeB = b.office ?? '';
+        valA = (officeMap[String(officeA)] ?? "").toLowerCase();
+        valB = (officeMap[String(officeB)] ?? "").toLowerCase();
+      } else if (sortKey === "acc_lvl") {
+        valA = a.acc_lvl;
+        valB = b.acc_lvl;
+      } else if (sortKey === "is_active") {
+        valA = a.is_active ? 0 : 1;
+        valB = b.is_active ? 0 : 1;
+      }
+
+      if (valA < valB) return sortDir === "asc" ? -1 : 1;
+      if (valA > valB) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+  const thClass = "flex items-center gap-0.5 cursor-pointer select-none hover:text-foreground transition-colors";
 
   return (
     <AdminLayout title="Users" subtitle="Manage system users">
@@ -218,28 +282,85 @@ const UserPage = () => {
         />
       )}
 
-      <div className="flex items-center justify-between gap-3 mb-5 sm:flex-col sm:items-stretch">
-        <div className="relative flex-1 max-w-xs sm:max-w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input type="text" placeholder="Search users..." value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+      <div className="flex flex-col gap-3 mb-5">
+        {/* Row 1: search + add */}
+        <div className="flex items-center justify-between gap-3 sm:flex-col sm:items-stretch">
+          <div className="relative flex-1 max-w-xs sm:max-w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input type="text" placeholder="Search users..." value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+          </div>
+          <button onClick={() => setModal({ open: true })}
+            className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2 rounded-lg hover:opacity-90 transition">
+            <Plus className="w-4 h-4" /> Add User
+          </button>
         </div>
-        <button onClick={() => setModal({ open: true })}
-          className="flex items-center gap-2 bg-primary text-primary-foreground text-sm font-medium px-4 py-2 rounded-lg hover:opacity-90 transition">
-          <Plus className="w-4 h-4" /> Add User
-        </button>
+
+        {/* Row 2: filters */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Office filter */}
+          <div className="relative">
+            <select
+              value={filterOffice}
+              onChange={e => setFilterOffice(e.target.value)}
+              style={filterOffice ? { backgroundColor: "hsl(var(--primary) / 0.08)", borderColor: "hsl(var(--primary))" } : {}}
+              className="appearance-none rounded-lg border border-border bg-background px-3 py-1.5 pr-8 text-sm text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition data-[active=true]:font-medium"
+              data-active={!!filterOffice}>
+              <option value="">All Offices</option>
+              {offices.map(o => <option key={o.officeID} value={o.officeID}>{o.name}</option>)}
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          </div>
+
+          {/* Account Level filter */}
+          <div className="relative">
+            <select
+              value={filterAccLvl}
+              onChange={e => setFilterAccLvl(e.target.value)}
+              style={filterAccLvl ? { backgroundColor: "hsl(var(--primary) / 0.08)", borderColor: "hsl(var(--primary))" } : {}}
+              className="appearance-none rounded-lg border border-border bg-background px-3 py-1.5 pr-8 text-sm text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+              data-active={!!filterAccLvl}>
+              <option value="">All Levels</option>
+              {ACC_LEVELS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          </div>
+
+          {/* Clear filters */}
+          {activeFilterCount > 0 && (
+            <button
+              onClick={() => { setFilterOffice(""); setFilterAccLvl(""); }}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-2.5 py-1.5 hover:bg-accent transition">
+              <X className="w-3 h-3" /> Clear filters
+              <span className="ml-0.5 bg-primary text-primary-foreground text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? <TableSkeleton rows={6} /> : (
         <div className="bg-card border border-border rounded-xl overflow-hidden">
+          {/* Header row */}
           <div className="grid grid-cols-[2fr_1fr_1fr_1fr_auto] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_auto]">
-            <span>User</span>
-            <span className="slg:hidden">Office</span>
-            <span className="slg:hidden">Level</span>
-            <span>Status</span>
+            <button className={thClass} onClick={() => toggleSort("name")}>
+              User <SortIcon col="name" sortKey={sortKey} sortDir={sortDir} />
+            </button>
+            <button className={`${thClass} slg:hidden`} onClick={() => toggleSort("office")}>
+              Office <SortIcon col="office" sortKey={sortKey} sortDir={sortDir} />
+            </button>
+            <button className={`${thClass} slg:hidden`} onClick={() => toggleSort("acc_lvl")}>
+              Level <SortIcon col="acc_lvl" sortKey={sortKey} sortDir={sortDir} />
+            </button>
+            <button className={thClass} onClick={() => toggleSort("is_active")}>
+              Status <SortIcon col="is_active" sortKey={sortKey} sortDir={sortDir} />
+            </button>
             <span>Actions</span>
           </div>
+
+          {/* Body */}
           {filtered.length === 0 ? (
             <div className="px-5 py-12 text-center text-sm text-muted-foreground">No users found.</div>
           ) : (
