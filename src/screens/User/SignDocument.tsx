@@ -591,34 +591,55 @@ const SignDocument = () => {
     }
   };
 
-  const handleDownloadFiles = async () => {
-    if (!doc) return;
-    const filesToDownload = doc.files?.length
-      ? doc.files
-      : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
-    if (!filesToDownload.length) return;
-    try {
-      const tok = localStorage.getItem("auth_token");
-      for (let i = 0; i < filesToDownload.length; i++) {
-        const f   = filesToDownload[i];
-        const url = f.file_url;
-        if (!url) continue;
-        const res = await fetch(url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const a    = document.createElement("a");
-        a.href     = URL.createObjectURL(blob);
-        a.download = filesToDownload.length > 1
-          ? `${doc.tracknumber} - ${doc.title} (${i + 1}).pdf`
-          : `${doc.tracknumber} - ${doc.title}.pdf`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        if (i < filesToDownload.length - 1) await new Promise(r => setTimeout(r, 350));
+const handleDownloadFiles = async () => {
+  if (!doc) return;
+  const filesToDownload = doc.files?.length
+    ? doc.files
+    : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
+    
+  if (!filesToDownload.length) return;
+
+  try {
+    const tok = localStorage.getItem("auth_token");
+    for (let i = 0; i < filesToDownload.length; i++) {
+      const f = filesToDownload[i];
+      const url = f.file_url;
+      if (!url) continue;
+
+      const res = await fetch(url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+
+      // EXTRACT ORIGINAL FILENAME:
+      // This takes the part after the last slash in the URL
+      let originalName = '';
+      if (typeof url === 'string' && url.trim()) {
+        const lastPart = url.split('/').pop();
+        if (lastPart) {
+          originalName = lastPart.split('?')[0];
+        }
       }
-    } catch (e: any) {
-      setError(e?.message || "Failed to download PDF.");
+      
+      // If originalName exists, use it; otherwise, leave it empty to let the browser decide
+      a.download = originalName || "";
+
+      document.body.appendChild(a); // Recommended for better browser compatibility
+      a.click();
+      document.body.removeChild(a); 
+      
+      URL.revokeObjectURL(a.href);
+
+      if (i < filesToDownload.length - 1) {
+        await new Promise(r => setTimeout(r, 350));
+      }
     }
-  };
+  } catch (e: any) {
+    setError(e?.message || "Failed to download file.");
+  }
+};
 
   const handleManualSign = async () => {
     if (!doc) return;

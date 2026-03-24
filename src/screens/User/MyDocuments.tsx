@@ -144,38 +144,57 @@ const MyDocuments = () => {
   const [deleting,   setDeleting]   = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const handleDownload = async (doc: Document) => {
-    const filesToDownload = doc.files && doc.files.length > 0
-      ? doc.files
-      : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
-    if (filesToDownload.length === 0) return;
-    setDownloading(doc.id);
-    try {
-      const token = localStorage.getItem("auth_token");
-      for (let i = 0; i < filesToDownload.length; i++) {
-        const f = filesToDownload[i];
-        if (!f.file_url) continue;
-        const res = await fetch(f.file_url, {
-          headers: token ? { Authorization: `Token ${token}` } : {},
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement("a");
-        a.href     = url;
-        const suffix = filesToDownload.length > 1 ? ` (${i + 1})` : "";
-        a.download = `${doc.tracknumber} - ${doc.title}${suffix}.pdf`;
-        a.click();
-        URL.revokeObjectURL(url);
-        if (i < filesToDownload.length - 1) await new Promise(r => setTimeout(r, 350));
-      }
-    } catch (e) {
-      console.error("Download failed", e);
-    } finally {
-      setDownloading(null);
-    }
-  };
+const handleDownload = async (doc: Document) => {
+  const filesToDownload = doc.files && doc.files.length > 0
+    ? doc.files
+    : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
 
+  if (filesToDownload.length === 0) return;
+  
+  setDownloading(doc.id);
+
+  try {
+    const token = localStorage.getItem("auth_token");
+    
+    for (let i = 0; i < filesToDownload.length; i++) {
+      const f = filesToDownload[i];
+      if (!f.file_url) continue;
+
+      const res = await fetch(f.file_url, {
+        headers: token ? { Authorization: `Token ${token}` } : {},
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+
+      // 1. Get the original filename from the URL
+      // This splits by '/' and takes the last part, then removes any ?query params
+      const originalName = f.file_url.split('/').pop()?.split('?')[0];
+
+      // 2. Set download to the original name (or empty string if parsing fails)
+      a.download = originalName || "";
+
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      URL.revokeObjectURL(url);
+
+      // Delay to prevent the browser from blocking multiple simultaneous downloads
+      if (i < filesToDownload.length - 1) {
+        await new Promise(r => setTimeout(r, 350));
+      }
+    }
+  } catch (e) {
+    console.error("Download failed", e);
+  } finally {
+    setDownloading(null);
+  }
+};
   const handleResend = async () => {
     if (!resendDoc) return;
     setResending(true);
