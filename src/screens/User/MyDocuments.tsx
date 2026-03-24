@@ -476,7 +476,7 @@ const handleDownload = async (doc: Document) => {
       {/* ── Table ── */}
       <div className="bg-card border border-border rounded-xl overflow-hidden min-h-[530px] flex flex-col">
         {/* Header — always visible */}
-        <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_180px]">
+        <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_180px] sm:grid-cols-[2fr_1fr_80px]">
           <span>Document</span>
           <span className="slg:hidden">Track No.</span>
           <span className="slg:hidden">Date</span>
@@ -497,7 +497,7 @@ const handleDownload = async (doc: Document) => {
           paginated.map(doc => (
             <div
               key={doc.id}
-              className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[2fr_1fr_180px]"
+              className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[2fr_1fr_180px] sm:grid-cols-[2fr_1fr_80px]"
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
@@ -513,7 +513,7 @@ const handleDownload = async (doc: Document) => {
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground"}`}>
                 {statusLabel(doc, user?.id)}
               </span>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center sm:items-end gap-1.5 w-full">
                 <button
                   onClick={() => navigate(`/dtms/sign/${doc.tracknumber}`)}
                   className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-primary transition-colors"

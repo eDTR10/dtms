@@ -284,22 +284,37 @@ const SignatureSettings = () => {
     }
   };
 
-  // Mouse drag handler for stamp designer
+  // Mouse and touch drag handler for stamp designer
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
       if (!dragging || !stampDesRef.current) return;
+      let clientX: number, clientY: number;
+      if (e instanceof TouchEvent) {
+        if (e.touches.length === 0) return;
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+        // Prevent scrolling while dragging
+        if (dragging) e.preventDefault();
+      } else {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      }
       const rect = stampDesRef.current.getBoundingClientRect();
-      const pctX = Math.max(5, Math.min(95, ((e.clientX - rect.left)  / rect.width)  * 100));
-      const pctY = Math.max(0, Math.min(88, ((e.clientY - rect.top)   / rect.height) * 100));
+      const pctX = Math.max(5, Math.min(95, ((clientX - rect.left)  / rect.width)  * 100));
+      const pctY = Math.max(0, Math.min(88, ((clientY - rect.top)   / rect.height) * 100));
       if (dragging === "img") { setImgLeft(Math.round(pctX)); setImgTop(Math.round(pctY)); }
       else                    { setTxtLeft(Math.round(pctX)); setTxtTop(Math.round(pctY)); }
     };
     const onUp = () => setDragging(null);
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup",   onUp);
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend",  onUp);
     return () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup",   onUp);
+      document.removeEventListener("touchmove", onMove);
+      document.removeEventListener("touchend",  onUp);
     };
   }, [dragging]);
 
@@ -526,6 +541,7 @@ const SignatureSettings = () => {
                             maxWidth:  "90%",
                           }}
                           onMouseDown={e => { e.preventDefault(); setDragging("img"); }}
+                          onTouchStart={e => { e.preventDefault(); setDragging("img"); }}
                         />
                       )}
 
@@ -539,6 +555,7 @@ const SignatureSettings = () => {
                           lineHeight: 1.25,
                         }}
                         onMouseDown={e => { e.preventDefault(); setDragging("txt"); }}
+                        onTouchStart={e => { e.preventDefault(); setDragging("txt"); }}
                       >
                         {showSignedBy && (
                           <p className="text-slate-400 leading-tight px-1" style={{ fontSize: designerSignedBySize }}>
@@ -564,9 +581,9 @@ const SignatureSettings = () => {
                   </div>
 
                   {/* Sliders */}
-                  <div className="flex flex-col gap-4 flex-1 min-w-0">
+                  <div className="flex flex-col sm:w-full gap-4 flex-1 min-w-0">
 
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-1.5  sm:w-full">
                       <label className="text-xs font-medium text-foreground flex items-center gap-1">
                         <Type className="w-3.5 h-3.5 text-primary" /> Text Size
                         <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{textSize} pt</span>
