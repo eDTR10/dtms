@@ -2,9 +2,10 @@ import { useEffect, useState, useRef, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Upload, FileText, ChevronDown, ChevronUp, AlertTriangle, User, Briefcase,
-  BookOpen, MessageSquare, X, Plus, Send, Users, Link2, Link2Off,
+  BookOpen, MessageSquare, X, Plus, Send, Users, Link2, Link2Off, Loader2,
 } from "lucide-react";
 import UserLayout from "./UserLayout";
+import SendingOverlay from "@/components/ui/SendingOverlay";
 import {
   documentApi, templateApi, officeApi, userApi,
   DocumentTemplate, Office, SignatoryUser,
@@ -12,10 +13,10 @@ import {
 import { useAuth } from "../Auth/AuthContext";
 
 interface SignatoryEntry {
-  user_id:    number;
+  user_id: number;
   user_email: string;
-  user_name:  string;
-  order:      number;
+  user_name: string;
+  order: number;
 }
 
 const PAGE_SIZE = 8;
@@ -35,22 +36,22 @@ const normalizeSignatoryOrders = (entries: SignatoryEntry[]): SignatoryEntry[] =
 };
 
 const CreateDocument = () => {
-  const navigate  = useNavigate();
-  const { user }  = useAuth();
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
-  const [offices,   setOffices]   = useState<Office[]>([]);
-  const [allUsers,  setAllUsers]  = useState<SignatoryUser[]>([]);
-  const [loading,   setLoading]   = useState(false);
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [allUsers, setAllUsers] = useState<SignatoryUser[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState({
-    title:    "",
-    requestor:"",
+    title: "",
+    requestor: "",
     position: "",
-    message:  "",
+    message: "",
     template: "",
   });
-  const [files,    setFiles]    = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>([]);
   const [draggedFileIdx, setDraggedFileIdx] = useState<number | null>(null);
 
   // Move file up or down in the list
@@ -84,15 +85,15 @@ const CreateDocument = () => {
     setDraggedFileIdx(null);
   };
   const [dragging, setDragging] = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Signatory routing state ───────────────────────────────────────────────
-  const [signatories,  setSignatories]  = useState<SignatoryEntry[]>([]);
+  const [signatories, setSignatories] = useState<SignatoryEntry[]>([]);
   const [fromTemplate, setFromTemplate] = useState(false);
-  const [sigOffice,    setSigOffice]    = useState<string>("");
-  const [sigSearch,    setSigSearch]    = useState<string>("");
-  const [sigPage,      setSigPage]      = useState(0);
+  const [sigOffice, setSigOffice] = useState<string>("");
+  const [sigSearch, setSigSearch] = useState<string>("");
+  const [sigPage, setSigPage] = useState(0);
 
   // ── Load initial data ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -113,7 +114,7 @@ const CreateDocument = () => {
       setForm(f => ({
         ...f,
         requestor: `${user.first_name} ${user.last_name}`,
-        position:  user.position,
+        position: user.position,
       }));
     }
     return () => ctrl.abort();
@@ -137,10 +138,10 @@ const CreateDocument = () => {
                 .slice()
                 .sort((a, b) => a.order - b.order)
                 .map(step => ({
-                  user_id:    step.user_id,
+                  user_id: step.user_id,
                   user_email: step.user_email,
-                  user_name:  step.user_name,
-                  order:      step.order,
+                  user_name: step.user_name,
+                  order: step.order,
                 }))
             )
           );
@@ -163,10 +164,10 @@ const CreateDocument = () => {
     setSignatories(prev => [
       ...prev,
       {
-        user_id:    u.id,
+        user_id: u.id,
         user_email: u.email,
-        user_name:  `${u.first_name} ${u.last_name}`,
-        order:      prev.length === 0 ? 0 : Math.max(...prev.map(s => s.order)) + 1,
+        user_name: `${u.first_name} ${u.last_name}`,
+        order: prev.length === 0 ? 0 : Math.max(...prev.map(s => s.order)) + 1,
       },
     ]);
     setFromTemplate(false);
@@ -180,7 +181,7 @@ const CreateDocument = () => {
   const toggleParallel = (index: number) => {
     setSignatories(prev => {
       const updated = prev.map(s => ({ ...s }));
-      const above   = updated[index - 1];
+      const above = updated[index - 1];
       const current = updated[index];
       if (current.order === above.order) {
         // Split: bump this sig and all subsequent ones at or above this order
@@ -265,13 +266,13 @@ const CreateDocument = () => {
     setLoading(true);
     try {
       const fd = new FormData();
-      fd.append("userID",    String(user?.id ?? 0));
+      fd.append("userID", String(user?.id ?? 0));
       const selectedTemplate = form.template ? templates.find(t => String(t.id) === form.template) : undefined;
-      fd.append("title",     form.title);
-      fd.append("type",      selectedTemplate?.name ?? "Other");
+      fd.append("title", form.title);
+      fd.append("type", selectedTemplate?.name ?? "Other");
       fd.append("requestor", form.requestor);
-      fd.append("position",  form.position);
-      fd.append("message",   form.message);
+      fd.append("position", form.position);
+      fd.append("message", form.message);
       if (form.template) fd.append("template", form.template);
       // Append only the first file to document.file for backward compatibility
       if (files.length > 0) fd.append("file", files[0]);
@@ -329,20 +330,20 @@ const CreateDocument = () => {
               {/* Document Info */}
               <div className="bg-card border border-border rounded-2xl p-5 flex flex-col gap-4">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Document Info</p>
-   <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      <FileText className="w-3.5 h-3.5 text-muted-foreground" />
-                      Template <span className="text-muted-foreground font-normal text-xs">(optional)</span>
-                    </label>
-                    <div className="relative">
-                      <select name="template" value={form.template} onChange={handleChange}
-                        className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition">
-                        <option value="">— No template —</option>
-                        {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                    </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                    Template <span className="text-muted-foreground font-normal text-xs">(optional)</span>
+                  </label>
+                  <div className="relative">
+                    <select name="template" value={form.template} onChange={handleChange}
+                      className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition">
+                      <option value="">— No template —</option>
+                      {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                   </div>
+                </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     <BookOpen className="w-3.5 h-3.5 text-muted-foreground" />
@@ -353,7 +354,7 @@ const CreateDocument = () => {
                     className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
                 </div>
 
-             
+
 
                 {/* Template link + instruction */}
                 {(() => {
@@ -480,11 +481,10 @@ const CreateDocument = () => {
                       </div>
                     ) : (
                       <div
-                        className={`flex flex-col items-center gap-2 rounded-xl border-2 border-dashed bg-background px-4 py-8 cursor-pointer transition group ${
-                          dragging
-                            ? "border-primary bg-primary/5 scale-[1.01]"
-                            : "border-border hover:border-primary/50 hover:bg-accent/30"
-                        }`}
+                        className={`flex flex-col items-center gap-2 rounded-xl border-2 border-dashed bg-background px-4 py-8 cursor-pointer transition group ${dragging
+                          ? "border-primary bg-primary/5 scale-[1.01]"
+                          : "border-border hover:border-primary/50 hover:bg-accent/30"
+                          }`}
                         onClick={() => fileInputRef.current?.click()}
                         onDragOver={e => { e.preventDefault(); setDragging(true); }}
                         onDragEnter={e => { e.preventDefault(); setDragging(true); }}
@@ -555,11 +555,10 @@ const CreateDocument = () => {
                                   type="button"
                                   title={isParallelWithAbove ? "Click to sign separately (after above)" : "Click to sign at the same time as above"}
                                   onClick={() => toggleParallel(i)}
-                                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
-                                    isParallelWithAbove
-                                      ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
-                                      : "bg-accent text-muted-foreground hover:text-foreground"
-                                  }`}
+                                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${isParallelWithAbove
+                                    ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
+                                    : "bg-accent text-muted-foreground hover:text-foreground"
+                                    }`}
                                 >
                                   {isParallelWithAbove
                                     ? <><Link2 className="w-3 h-3" /> parallel &mdash; click to separate</>
@@ -568,9 +567,8 @@ const CreateDocument = () => {
                               </div>
                             )}
                             <div
-                              className={`flex items-center gap-3 rounded-lg px-4 py-2.5 ${
-                                isParallelWithAbove ? "bg-blue-500/5 border border-blue-500/20" : "bg-accent/50"
-                              } ${draggedSigIdx === i ? 'opacity-60' : ''}`}
+                              className={`flex items-center gap-3 rounded-lg px-4 py-2.5 ${isParallelWithAbove ? "bg-blue-500/5 border border-blue-500/20" : "bg-accent/50"
+                                } ${draggedSigIdx === i ? 'opacity-60' : ''}`}
                               draggable
                               onDragStart={() => handleSigDragStart(i)}
                               onDragOver={e => handleSigDragOver(i, e)}
@@ -578,9 +576,8 @@ const CreateDocument = () => {
                               onDrop={handleSigDragEnd}
                               style={{ cursor: 'move' }}
                             >
-                              <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${
-                                isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
-                              }`}>{stepNum(s.order)}</span>
+                              <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
+                                }`}>{stepNum(s.order)}</span>
                               <p className="text-sm font-medium text-foreground truncate flex-1">{s.user_name}</p>
                               <div className="flex items-center gap-1 shrink-0">
                                 <button
@@ -746,7 +743,7 @@ const CreateDocument = () => {
                 <button type="submit" disabled={loading}
                   className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed">
                   {loading ? (
-                    "Processing..."
+                    <><Loader2 className="w-4 h-4 animate-spin" /> {hasSigs ? "Sending…" : "Creating…"}</>
                   ) : hasSigs ? (
                     <><Send className="w-4 h-4" /> Create &amp; Send</>
                   ) : (
@@ -764,6 +761,8 @@ const CreateDocument = () => {
           </div>
         </form>
       </div>
+
+      {loading && <SendingOverlay hasSigs={hasSigs} />}
     </UserLayout>
   );
 };

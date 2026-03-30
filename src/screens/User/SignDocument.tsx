@@ -54,14 +54,14 @@ const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string || "").replace(/\/
 
 const SignDocument = () => {
   const { tracknumber } = useParams<{ tracknumber: string }>();
-  const navigate        = useNavigate();
-  const { user }        = useAuth();
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const [doc, setDoc]            = useState<Document | null>(null);
-  const [loading, setLoading]    = useState(true);
-  const [signing, setSigning]    = useState(false);
-  const [done, setDone]          = useState(false);
-  const [error, setError]        = useState<string | null>(null);
+  const [doc, setDoc] = useState<Document | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [signing, setSigning] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [signedBlobs, setSignedBlobs] = useState<Array<{ blob: Blob; name: string }>>([]);
   const [selectedFileUrl, setSelectedFileUrl] = useState<string | null>(null);
 
@@ -71,34 +71,43 @@ const SignDocument = () => {
     sigBoxW: number; sigBoxH: number;
     placed: boolean; pdfW: number; pdfH: number;
   };
-  const fileStampRef   = useRef<Record<number, FileStampConfig>>({});
+  const fileStampRef = useRef<Record<number, FileStampConfig>>({});
   const [fileStampsState, setFileStampsState] = useState<Record<number, FileStampConfig>>({});
-  const [activeDocFile, setActiveDocFile]     = useState<DocumentFile | null>(null);
+  const [activeDocFile, setActiveDocFile] = useState<DocumentFile | null>(null);
   const [manualSignedFiles, setManualSignedFiles] = useState<Record<number, File>>({});
 
   // ----- UI tabs -----
-  const [pdfVisible, setPdfVisible]       = useState(true);
-  const [credOpen, setCredOpen]           = useState(false);
+  const [pdfVisible, setPdfVisible] = useState(true);
+  const [credOpen, setCredOpen] = useState(false);
 
   // ----- Live placement overlay -----
-  const [placingMode, setPlacingMode]  = useState(false);
-  const [hoverPx, setHoverPx]          = useState<{left:number;top:number} | null>(null);
-  const [stampPlaced, setStampPlaced]  = useState(false);
+  const [placingMode, setPlacingMode] = useState(false);
+  const [hoverPx, setHoverPx] = useState<{ left: number; top: number } | null>(null);
+  const [stampPlaced, setStampPlaced] = useState(false);
 
   // Drag-to-move / drag-to-resize refs for the confirmed stamp box
-  const draggingStamp = useRef<{ startX:number; startY:number; origX:number; origY:number } | null>(null);
-  const resizingStamp = useRef<{ startX:number; startY:number; origW:number; origH:number; origY:number } | null>(null);
+  const draggingStamp = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizingStamp = useRef<{ startX: number; startY: number; origW: number; origH: number; origY: number } | null>(null);
 
   // ----- Canvas PDF viewer -----
-  const canvasRef          = useRef<HTMLCanvasElement>(null);
+  // ── Mobile detection for responsive handle sizes ──
+  const [_isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 640);
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 640px)");
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const renderTaskRef      = useRef<any>(null);
-  const [pdfDoc, setPdfDoc]               = useState<any>(null);
-  const [pdfBlobUrl, setPdfBlobUrl]       = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading]       = useState(false);
-  const [pdfError, setPdfError]           = useState<string | null>(null);
-  const [renderScale, setRenderScale]     = useState(1);
-  const [pdfPageWidth,  setPdfPageWidth]  = useState(PDF_W);
+  const renderTaskRef = useRef<any>(null);
+  const [pdfDoc, setPdfDoc] = useState<any>(null);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [renderScale, setRenderScale] = useState(1);
+  const [pdfPageWidth, setPdfPageWidth] = useState(PDF_W);
   const [pdfPageHeight, setPdfPageHeight] = useState(PDF_H);
 
   /** Render a single page to the canvas at container-fill scale */
@@ -109,13 +118,13 @@ const SignDocument = () => {
       try { await renderTaskRef.current.promise; } catch (_) { /* RenderingCancelledException */ }
       renderTaskRef.current = null;
     }
-    const page  = await doc.getPage(pageNum);
-    const vp1   = page.getViewport({ scale: 1 });
-    const cw    = viewerContainerRef.current.clientWidth || 600;
+    const page = await doc.getPage(pageNum);
+    const vp1 = page.getViewport({ scale: 1 });
+    const cw = viewerContainerRef.current.clientWidth || 600;
     const scale = cw / vp1.width;
-    const vp    = page.getViewport({ scale });
+    const vp = page.getViewport({ scale });
     const canvas = canvasRef.current;
-    canvas.width  = Math.floor(vp.width);
+    canvas.width = Math.floor(vp.width);
     canvas.height = Math.floor(vp.height);
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -154,7 +163,7 @@ const SignDocument = () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const arrayBuffer = await res.arrayBuffer();
       const blob = new Blob([arrayBuffer], { type: "application/pdf" });
-      const url  = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       setPdfBlobUrl(url);
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
       const doc = await loadingTask.promise;
@@ -172,62 +181,78 @@ const SignDocument = () => {
   }, [pdfBlobUrl]);
 
   // ----- Credentials (pre-filled from localStorage) -----
-  const [p12File, setP12File]         = useState<File | null>(null);
+  const [p12File, setP12File] = useState<File | null>(null);
   const [p12FileName, setP12FileName] = useState("");
-  const [password, setPassword]       = useState("");
+  const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [sigPos, setSigPos]           = useState("");
-  const [signImage, setSignImage]     = useState<File | null>(null);
+  const [sigPos, setSigPos] = useState("");
+  const [signImage, setSignImage] = useState<File | null>(null);
   const [signImagePreview, setSignImagePreview] = useState("");
-  const [textSize, setTextSize]       = useState(12);
-  const [imgWidth, setImgWidth]       = useState(150);
+  const [textSize, setTextSize] = useState(12);
+  const [imgWidth, setImgWidth] = useState(150);
   // Stamp element positions loaded from SignatureSettings (% from top/left of stamp box)
-  const [sigImgTop,  setSigImgTop]  = useState(5);
+  const [sigImgTop, setSigImgTop] = useState(5);
   const [sigImgLeft, setSigImgLeft] = useState(50);
-  const [sigTxtTop,  setSigTxtTop]  = useState(55);
+  const [sigTxtTop, setSigTxtTop] = useState(55);
   const [sigTxtLeft, setSigTxtLeft] = useState(50);
   // ── NEW: "Digitally Signed by:" label from SignatureSettings ──
   const [showSignedBy, setShowSignedBy] = useState(false);
 
   // ----- Signature placement (PDF pts, origin top-left) -----
-  const [sigX, setSigX]     = useState(170);
-  const [sigY, setSigY]     = useState(720);
+  const [sigX, setSigX] = useState(170);
+  const [sigY, setSigY] = useState(720);
   const [sigBoxW, setSigBoxW] = useState(Number(localStorage.getItem("sig_stamp_width")) || 220);
   const [sigBoxH, setSigBoxH] = useState(Number(localStorage.getItem("sig_stamp_height")) || 80);
   const [sigPage, setSigPage] = useState(1);
 
   useEffect(() => {
     if (pdfDoc) renderPage(pdfDoc, sigPage);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sigPage, pdfDoc]);
 
-  // Global mouse handlers for drag-to-move and drag-to-resize on confirmed stamp
+  // Global mouse + touch handlers for drag-to-move and drag-to-resize on confirmed stamp
   useEffect(() => {
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-    const onMove = (e: MouseEvent) => {
+    const handlePointerMove = (clientX: number, clientY: number) => {
       if (draggingStamp.current) {
         const { startX, startY, origX, origY } = draggingStamp.current;
-        const dx = (e.clientX - startX) / renderScale;
-        const dy = (e.clientY - startY) / renderScale;
-        setSigX(clamp(origX + dx, 0, pdfPageWidth  - sigBoxW));
+        const dx = (clientX - startX) / renderScale;
+        const dy = (clientY - startY) / renderScale;
+        setSigX(clamp(origX + dx, 0, pdfPageWidth - sigBoxW));
         setSigY(clamp(origY - dy, 0, pdfPageHeight - sigBoxH));
       }
       if (resizingStamp.current) {
         const { startX, startY, origW, origH, origY } = resizingStamp.current;
-        const dw = (e.clientX - startX) / renderScale;
-        const dh = (e.clientY - startY) / renderScale;
-        const newW = clamp(origW + dw, 40,  pdfPageWidth);
-        const newH = clamp(origH + dh, 20,  pdfPageHeight);
+        const dw = (clientX - startX) / renderScale;
+        const dh = (clientY - startY) / renderScale;
+        const newW = clamp(origW + dw, 40, pdfPageWidth);
+        const newH = clamp(origH + dh, 20, pdfPageHeight);
         setSigBoxW(Math.round(newW));
         setSigBoxH(Math.round(newH));
         setSigY(clamp(origY - dh, 0, pdfPageHeight - 20));
       }
     };
+    const onMouseMove = (e: MouseEvent) => handlePointerMove(e.clientX, e.clientY);
+    const onTouchMove = (e: TouchEvent) => {
+      if (!draggingStamp.current && !resizingStamp.current) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      handlePointerMove(t.clientX, t.clientY);
+    };
     const onUp = () => { draggingStamp.current = null; resizingStamp.current = null; };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup",   onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    window.addEventListener("touchcancel", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("touchcancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderScale, pdfPageWidth, pdfPageHeight, sigBoxW, sigBoxH]);
 
   useEffect(() => {
@@ -236,19 +261,19 @@ const SignDocument = () => {
   }, [pdfPageWidth, pdfPageHeight, sigBoxW, sigBoxH]);
 
   const mySig: DocumentSignatory | undefined = doc?.signatories.find(s => s.user_id === user?.id);
-  const isOwner  = doc?.userID === user?.id;
-  const canSign  = !!doc && (
+  const isOwner = doc?.userID === user?.id;
+  const canSign = !!doc && (
     isOwner || mySig?.status === "pending" || mySig?.status === "signed"
   );
 
   // ── Decline state ───────────────────────────────────────────────────────────
-  const [declineOpen,   setDeclineOpen]   = useState(false);
+  const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
-  const [signRemarks, setSignRemarks]     = useState("");
-  const [declining,     setDeclining]     = useState(false);
-  const [signMode,        setSignMode]        = useState<"digital" | "manual">("digital");
+  const [signRemarks, setSignRemarks] = useState("");
+  const [declining, setDeclining] = useState(false);
+  const [signMode, setSignMode] = useState<"digital" | "manual">("digital");
   const [manualUploading, setManualUploading] = useState(false);
-  const [manualDragging,  setManualDragging]  = useState(false);
+  const [manualDragging, setManualDragging] = useState(false);
 
   const handleDecline = async () => {
     if (!mySig) return;
@@ -268,27 +293,27 @@ const SignDocument = () => {
 
   // Load all sig settings from localStorage on mount
   useEffect(() => {
-    setPassword(localStorage.getItem("sig_password")    || "");
+    setPassword(localStorage.getItem("sig_password") || "");
     setDisplayName(localStorage.getItem("sig_displayName") || `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim());
-    setSigPos(localStorage.getItem("sig_position")    || user?.position || "");
-    setTextSize(Number(localStorage.getItem("sig_text_size"))    || 12);
+    setSigPos(localStorage.getItem("sig_position") || user?.position || "");
+    setTextSize(Number(localStorage.getItem("sig_text_size")) || 12);
     setImgWidth(Number(localStorage.getItem("sig_image_width")) || 150);
     setSigBoxW(Number(localStorage.getItem("sig_stamp_width")) || 220);
     setSigBoxH(Number(localStorage.getItem("sig_stamp_height")) || 80);
-    setSigImgTop(Number(localStorage.getItem("sig_img_top"))   || 5);
-    setSigImgLeft(Number(localStorage.getItem("sig_img_left"))  || 50);
-    setSigTxtTop(Number(localStorage.getItem("sig_txt_top"))    || 55);
-    setSigTxtLeft(Number(localStorage.getItem("sig_txt_left"))  || 50);
+    setSigImgTop(Number(localStorage.getItem("sig_img_top")) || 5);
+    setSigImgLeft(Number(localStorage.getItem("sig_img_left")) || 50);
+    setSigTxtTop(Number(localStorage.getItem("sig_txt_top")) || 55);
+    setSigTxtLeft(Number(localStorage.getItem("sig_txt_left")) || 50);
     // ── NEW: load showSignedBy ──
     setShowSignedBy(localStorage.getItem("sig_show_signed_by") === "true");
 
-    const p12b64  = localStorage.getItem("sig_p12_data");
+    const p12b64 = localStorage.getItem("sig_p12_data");
     const p12name = localStorage.getItem("sig_p12_name") || "certificate.p12";
     if (p12b64) {
       try {
         setP12File(base64ToFile(p12b64, p12name, "application/x-pkcs12"));
         setP12FileName(p12name);
-      } catch {}
+      } catch { }
     }
 
     const imgData = localStorage.getItem("sig_image_data");
@@ -298,7 +323,7 @@ const SignDocument = () => {
         const [hdr, b64] = imgData.split(",");
         const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
         setSignImage(base64ToFile(b64, "signature.png", mime));
-      } catch {}
+      } catch { }
     }
   }, [user?.first_name, user?.last_name, user?.position]);
 
@@ -327,20 +352,20 @@ const SignDocument = () => {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tracknumber]);
 
   const handleOverlayEvent = (e: React.MouseEvent<HTMLDivElement>, isClick: boolean) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const sc   = renderScale;
-    const px   = e.clientX - rect.left;
-    const py   = e.clientY - rect.top;
-    const sw   = sigBoxW * sc;
-    const sh   = sigBoxH * sc;
-    const left = Math.max(0, Math.min(rect.width  - sw, px - sw / 2));
-    const top  = Math.max(0, Math.min(rect.height - sh, py - sh / 2));
+    const sc = renderScale;
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const sw = sigBoxW * sc;
+    const sh = sigBoxH * sc;
+    const left = Math.max(0, Math.min(rect.width - sw, px - sw / 2));
+    const top = Math.max(0, Math.min(rect.height - sh, py - sh / 2));
     if (isClick) {
-      const newX = Math.max(0, Math.min(pdfPageWidth  - sigBoxW, px / sc - sigBoxW / 2));
+      const newX = Math.max(0, Math.min(pdfPageWidth - sigBoxW, px / sc - sigBoxW / 2));
       const newY = Math.max(0, Math.min(pdfPageHeight - sigBoxH, pdfPageHeight - py / sc - sigBoxH / 2));
       setSigX(newX);
       setSigY(newY);
@@ -393,7 +418,7 @@ const SignDocument = () => {
       const b64 = await fileToBase64(file);
       localStorage.setItem("sig_p12_data", b64);
       localStorage.setItem("sig_p12_name", file.name);
-    } catch {}
+    } catch { }
   };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -413,68 +438,73 @@ const SignDocument = () => {
    * Build a composite PNG that matches the Stamp Designer preview exactly.
    * Updated to support LEFT-aligned text and the optional "Digitally Signed by:" label.
    */
- const buildStampCanvas = (): Promise<Blob | null> =>
-  new Promise(resolve => {
-    const W = 1000;
-    const H = Math.max(160, Math.round(W * (sigBoxH / sigBoxW)));
-    const canvas = document.createElement("canvas");
-    canvas.width  = W;
-    canvas.height = H;
-    const ctx = canvas.getContext("2d")!;
-    ctx.clearRect(0, 0, W, H);
+  const buildStampCanvas = (): Promise<Blob | null> =>
+    new Promise(resolve => {
+      const W = 1000;
+      const H = Math.max(160, Math.round(W * (sigBoxH / sigBoxW)));
+      const canvas = document.createElement("canvas");
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext("2d")!;
+      ctx.clearRect(0, 0, W, H);
 
-    const ptToPx     = H / sigBoxH;
-    const nameFs     = textSize * ptToPx;
-    const posFs      = Math.max(6, (textSize - 2)) * ptToPx;
-    const signedByFs = Math.max(5, (textSize - 3)) * ptToPx;
+      // Scale content down when stamp is smaller than its default size
+      const defaultW = Number(localStorage.getItem("sig_stamp_width")) || 220;
+      const defaultH = Number(localStorage.getItem("sig_stamp_height")) || 80;
+      const stampContentScale = Math.min(sigBoxW / defaultW, sigBoxH / defaultH, 1);
 
-    const drawText = () => {
-      // ── Match the HTML preview: text left-edge starts at sigTxtLeft% of W ──
-      const xPos = (sigTxtLeft / 100) * W;
-      const ty   = (sigTxtTop  / 100) * H;
+      const ptToPx = H / sigBoxH;
+      const nameFs = textSize * ptToPx * stampContentScale;
+      const posFs = Math.max(6, (textSize - 2)) * ptToPx * stampContentScale;
+      const signedByFs = Math.max(5, (textSize - 3)) * ptToPx * stampContentScale;
 
-      ctx.textAlign    = "left";
-      ctx.textBaseline = "top";
+      const drawText = () => {
+        // ── Match the HTML preview: text left-edge starts at sigTxtLeft% of W ──
+        const xPos = (sigTxtLeft / 100) * W;
+        const ty = (sigTxtTop / 100) * H;
 
-      let nameOffsetY = ty;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
 
-      if (showSignedBy) {
-        ctx.font      = `${signedByFs}px sans-serif`;
-        ctx.fillStyle = "#64748b";
-        ctx.fillText("Digitally Signed by:", xPos, ty);
-        nameOffsetY = ty + signedByFs * 1.4;
-      }
+        let nameOffsetY = ty;
 
-      if (displayName) {
-        ctx.font      = `bold ${nameFs}px sans-serif`;
-        ctx.fillStyle = "#1e3a5f";
-        ctx.fillText(displayName, xPos, nameOffsetY);
-      }
-      if (sigPos) {
-        ctx.font      = `${posFs}px sans-serif`;
-        ctx.fillStyle = "#2563EB";
-        ctx.fillText(sigPos, xPos, nameOffsetY + nameFs * 1.35);
-      }
-      canvas.toBlob(b => resolve(b), "image/png");
-    };
+        if (showSignedBy) {
+          ctx.font = `${signedByFs}px sans-serif`;
+          ctx.fillStyle = "#64748b";
+          ctx.fillText("Digitally Signed by:", xPos, ty);
+          nameOffsetY = ty + signedByFs * 1.4;
+        }
 
-    if (signImagePreview) {
-      const img = new Image();
-      img.onload = () => {
-        // Image is centered on sigImgLeft% — matches HTML translate(-50%, 0)
-        const imgPxOnCanvas = (imgWidth / sigBoxW) * W;
-        const ih = img.naturalHeight * (imgPxOnCanvas / Math.max(1, img.naturalWidth));
-        const ix = (sigImgLeft / 100) * W - imgPxOnCanvas / 2;
-        const iy = (sigImgTop  / 100) * H;
-        ctx.drawImage(img, ix, iy, imgPxOnCanvas, ih);
-        drawText();
+        if (displayName) {
+          ctx.font = `bold ${nameFs}px sans-serif`;
+          ctx.fillStyle = "#1e3a5f";
+          ctx.fillText(displayName, xPos, nameOffsetY);
+        }
+        if (sigPos) {
+          ctx.font = `${posFs}px sans-serif`;
+          ctx.fillStyle = "#2563EB";
+          ctx.fillText(sigPos, xPos, nameOffsetY + nameFs * 1.35);
+        }
+        canvas.toBlob(b => resolve(b), "image/png");
       };
-      img.onerror = drawText;
-      img.src = signImagePreview;
-    } else {
-      drawText();
-    }
-  });
+
+      if (signImagePreview) {
+        const img = new Image();
+        img.onload = () => {
+          // Image is centered on sigImgLeft% — matches HTML translate(-50%, 0)
+          const imgPxOnCanvas = (imgWidth / sigBoxW) * W * stampContentScale;
+          const ih = img.naturalHeight * (imgPxOnCanvas / Math.max(1, img.naturalWidth));
+          const ix = (sigImgLeft / 100) * W - imgPxOnCanvas / 2;
+          const iy = (sigImgTop / 100) * H;
+          ctx.drawImage(img, ix, iy, imgPxOnCanvas, ih);
+          drawText();
+        };
+        img.onerror = drawText;
+        img.src = signImagePreview;
+      } else {
+        drawText();
+      }
+    });
 
   const handleSign = async () => {
     if (!doc) return;
@@ -508,7 +538,7 @@ const SignDocument = () => {
 
       for (let i = 0; i < filesToSign.length; i++) {
         const docFile = filesToSign[i];
-        const cfg     = fileStampRef.current[docFile.id];
+        const cfg = fileStampRef.current[docFile.id];
 
         const res = await fetch(docFile.file_url, {
           headers: tok ? { Authorization: `Token ${tok}` } : {},
@@ -522,12 +552,12 @@ const SignDocument = () => {
         const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
 
         const fd = new FormData();
-        fd.append("pdf_file",    pdfBlob,  `${doc.tracknumber}-${i}.pdf`);
-        fd.append("p12_file",    p12File,  p12File.name);
-        fd.append("password",    password);
+        fd.append("pdf_file", pdfBlob, `${doc.tracknumber}-${i}.pdf`);
+        fd.append("p12_file", p12File, p12File.name);
+        fd.append("password", password);
         fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
-        fd.append("sign_note",   sigPos || user?.position || "");
-        fd.append("page",        String(cfg.sigPage));
+        fd.append("sign_note", sigPos || user?.position || "");
+        fd.append("page", String(cfg.sigPage));
         fd.append("sign_all_pages", "false");
         fd.append("x_ratio", String(xRatio));
         fd.append("y_ratio", String(yRatio));
@@ -544,19 +574,19 @@ const SignDocument = () => {
           throw new Error(msg || `PNPKI server error on file ${i + 1}.`);
         }
         const signedPdfBlob = await signRes.blob();
-        const signedName    = `${doc.tracknumber}-signed-${i + 1}.pdf`;
+        const signedName = `${doc.tracknumber}-signed-${i + 1}.pdf`;
         collected.push({ blob: signedPdfBlob, name: signedName });
 
-        uploadFd.append(`file_${i}`,    signedPdfBlob, signedName);
+        uploadFd.append(`file_${i}`, signedPdfBlob, signedName);
         uploadFd.append(`file_id_${i}`, String(docFile.id));
       }
 
       setSignedBlobs(collected);
 
       const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
-        method:  "PATCH",
+        method: "PATCH",
         headers: tok ? { Authorization: `Token ${tok}` } : {},
-        body:    uploadFd,
+        body: uploadFd,
       });
       if (!uploadRes.ok) {
         const txt = await uploadRes.text();
@@ -569,7 +599,7 @@ const SignDocument = () => {
       if (mySig) {
         try {
           await signatoryApi.update(mySig.id, { status: "signed", remarks: signRemarks });
-        } catch (e) {}
+        } catch (e) { }
       }
       setDone(true);
     } catch (err: any) {
@@ -583,63 +613,63 @@ const SignDocument = () => {
     if (!signedBlobs.length || !doc) return;
     for (const { blob, name } of signedBlobs) {
       const url = URL.createObjectURL(blob);
-      const a   = document.createElement("a");
-      a.href     = url;
+      const a = document.createElement("a");
+      a.href = url;
       a.download = name;
       a.click();
       URL.revokeObjectURL(url);
     }
   };
 
-const handleDownloadFiles = async () => {
-  if (!doc) return;
-  const filesToDownload = doc.files?.length
-    ? doc.files
-    : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
-    
-  if (!filesToDownload.length) return;
+  const handleDownloadFiles = async () => {
+    if (!doc) return;
+    const filesToDownload = doc.files?.length
+      ? doc.files
+      : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
 
-  try {
-    const tok = localStorage.getItem("auth_token");
-    for (let i = 0; i < filesToDownload.length; i++) {
-      const f = filesToDownload[i];
-      const url = f.file_url;
-      if (!url) continue;
+    if (!filesToDownload.length) return;
 
-      const res = await fetch(url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    try {
+      const tok = localStorage.getItem("auth_token");
+      for (let i = 0; i < filesToDownload.length; i++) {
+        const f = filesToDownload[i];
+        const url = f.file_url;
+        if (!url) continue;
 
-      const blob = await res.blob();
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
+        const res = await fetch(url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      // EXTRACT ORIGINAL FILENAME:
-      // This takes the part after the last slash in the URL
-      let originalName = '';
-      if (typeof url === 'string' && url.trim()) {
-        const lastPart = url.split('/').pop();
-        if (lastPart) {
-          originalName = lastPart.split('?')[0];
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+
+        // EXTRACT ORIGINAL FILENAME:
+        // This takes the part after the last slash in the URL
+        let originalName = '';
+        if (typeof url === 'string' && url.trim()) {
+          const lastPart = url.split('/').pop();
+          if (lastPart) {
+            originalName = lastPart.split('?')[0];
+          }
+        }
+
+        // If originalName exists, use it; otherwise, leave it empty to let the browser decide
+        a.download = originalName || "";
+
+        document.body.appendChild(a); // Recommended for better browser compatibility
+        a.click();
+        document.body.removeChild(a);
+
+        URL.revokeObjectURL(a.href);
+
+        if (i < filesToDownload.length - 1) {
+          await new Promise(r => setTimeout(r, 350));
         }
       }
-      
-      // If originalName exists, use it; otherwise, leave it empty to let the browser decide
-      a.download = originalName || "";
-
-      document.body.appendChild(a); // Recommended for better browser compatibility
-      a.click();
-      document.body.removeChild(a); 
-      
-      URL.revokeObjectURL(a.href);
-
-      if (i < filesToDownload.length - 1) {
-        await new Promise(r => setTimeout(r, 350));
-      }
+    } catch (e: any) {
+      setError(e?.message || "Failed to download file.");
     }
-  } catch (e: any) {
-    setError(e?.message || "Failed to download file.");
-  }
-};
+  };
 
   const handleManualSign = async () => {
     if (!doc) return;
@@ -648,16 +678,16 @@ const handleDownloadFiles = async () => {
     setManualUploading(true);
     setError(null);
     try {
-      const token  = localStorage.getItem("auth_token");
+      const token = localStorage.getItem("auth_token");
       const uploadFd = new FormData();
       entries.forEach(([fileId, file], i) => {
-        uploadFd.append(`file_${i}`,    file,    file.name);
+        uploadFd.append(`file_${i}`, file, file.name);
         uploadFd.append(`file_id_${i}`, fileId);
       });
       const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
-        method:  "PATCH",
+        method: "PATCH",
         headers: token ? { Authorization: `Token ${token}` } : {},
-        body:    uploadFd,
+        body: uploadFd,
       });
       if (!uploadRes.ok) {
         const txt = await uploadRes.text();
@@ -808,17 +838,16 @@ const handleDownloadFiles = async () => {
                     <div className="flex items-center gap-1.5 px-4 pt-3 pb-2 flex-wrap border-b border-border bg-muted/20">
                       <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mr-1">Files:</span>
                       {doc.files.map((f, idx) => {
-                        const cfg      = fileStampsState[f.id];
+                        const cfg = fileStampsState[f.id];
                         const isActive = activeDocFile?.id === f.id;
                         return (
                           <button
                             key={f.id}
                             onClick={() => switchToFile(f)}
-                            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition ${
-                              isActive
-                                ? "bg-primary text-primary-foreground shadow-sm"
-                                : "bg-accent text-foreground hover:bg-accent/70"
-                            }`}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition ${isActive
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "bg-accent text-foreground hover:bg-accent/70"
+                              }`}
                           >
                             {cfg?.placed
                               ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
@@ -904,7 +933,7 @@ const handleDownloadFiles = async () => {
                       {pdfDoc && !pdfLoading && (
                         <div ref={viewerContainerRef} className="relative w-full" style={{ background: "#e5e7eb" }}>
 
-                            {signing && <SigningOverlay />}
+                          {signing && <SigningOverlay />}
                           <canvas ref={canvasRef} className="block" />
 
                           {/* ── Placement overlay ── */}
@@ -929,9 +958,9 @@ const handleDownloadFiles = async () => {
                                 <div
                                   className="absolute border-2 border-blue-400 rounded pointer-events-none overflow-hidden"
                                   style={{
-                                    left:   hoverPx.left,
-                                    top:    hoverPx.top,
-                                    width:  sigBoxW * renderScale,
+                                    left: hoverPx.left,
+                                    top: hoverPx.top,
+                                    width: sigBoxW * renderScale,
                                     height: sigBoxH * renderScale,
                                     background: "rgba(59,130,246,0.15)",
                                     boxShadow: "0 0 0 1px rgba(59,130,246,0.6)",
@@ -941,11 +970,11 @@ const handleDownloadFiles = async () => {
                                     <img src={signImagePreview} alt="sig"
                                       className="absolute object-contain pointer-events-none"
                                       style={{
-                                        top:       `${sigImgTop}%`,
-                                        left:      `${sigImgLeft}%`,
+                                        top: `${sigImgTop}%`,
+                                        left: `${sigImgLeft}%`,
                                         transform: "translate(-50%, 0)",
-                                        width:     imgWidth * renderScale,
-                                        maxWidth:  "90%",
+                                        width: imgWidth * renderScale,
+                                        maxWidth: "90%",
                                       }} />
                                   )}
                                   {/* ── LEFT-ALIGNED hover ghost text ── */}
@@ -983,10 +1012,16 @@ const handleDownloadFiles = async () => {
                           {/* ── Confirmed stamp — small corner handles, full-box content ── */}
                           {!placingMode && stampPlaced && (() => {
                             const cssLeft = sigX * renderScale;
-                            const cssTop  = (pdfPageHeight - sigY - sigBoxH) * renderScale;
-                            const cssW    = sigBoxW * renderScale;
-                            const cssH    = sigBoxH * renderScale;
-                            const HANDLE  = 23; // fixed px, never scale-dependent
+                            const cssTop = (pdfPageHeight - sigY - sigBoxH) * renderScale;
+                            const cssW = sigBoxW * renderScale;
+                            const cssH = sigBoxH * renderScale;
+
+                            // Scale factor for stamp content based on stamp box size
+                            const defaultW = Number(localStorage.getItem("sig_stamp_width")) || 220;
+                            const defaultH = Number(localStorage.getItem("sig_stamp_height")) || 80;
+                            const stampScaleW = sigBoxW / defaultW;
+                            const stampScaleH = sigBoxH / defaultH;
+                            const stampContentScale = Math.min(stampScaleW, stampScaleH);
                             return (
                               <div
                                 className="absolute border-2 border-blue-500 rounded overflow-hidden select-none"
@@ -995,7 +1030,7 @@ const handleDownloadFiles = async () => {
                                   background: "rgba(59,130,246,0.10)", zIndex: 5, pointerEvents: "all",
                                 }}
                               >
-                                {/* Stamp content — full box */}
+                                {/* Stamp content — full box, scales proportionally */}
                                 <div className="absolute inset-0 overflow-hidden pointer-events-none">
                                   {signImagePreview && (
                                     <img src={signImagePreview} alt="sig"
@@ -1003,7 +1038,7 @@ const handleDownloadFiles = async () => {
                                       style={{
                                         top: `${sigImgTop}%`, left: `${sigImgLeft}%`,
                                         transform: "translate(-50%, 0)",
-                                        width: imgWidth * renderScale, maxWidth: "90%",
+                                        width: imgWidth * renderScale * stampContentScale, maxWidth: "90%",
                                       }} />
                                   )}
                                   {/* ── LEFT-ALIGNED confirmed stamp text ── */}
@@ -1018,17 +1053,17 @@ const handleDownloadFiles = async () => {
                                   >
                                     {showSignedBy && (
                                       <p className="text-slate-500 truncate"
-                                        style={{ fontSize: Math.max(6, (textSize - 3) * renderScale) }}>
+                                        style={{ fontSize: Math.max(4, (textSize - 3) * renderScale * stampContentScale) }}>
                                         Digitally Signed by:
                                       </p>
                                     )}
                                     <p className="font-bold text-blue-900 truncate px-0.5"
-                                      style={{ fontSize: Math.max(7, textSize * renderScale) }}>
+                                      style={{ fontSize: Math.max(5, textSize * renderScale * stampContentScale) }}>
                                       {displayName || `${user?.first_name} ${user?.last_name}`}
                                     </p>
                                     {(sigPos || user?.position) && (
                                       <p className="text-blue-700 truncate px-0.5"
-                                        style={{ fontSize: Math.max(6, (textSize - 2) * renderScale) }}>
+                                        style={{ fontSize: Math.max(4, (textSize - 2) * renderScale * stampContentScale) }}>
                                         {sigPos || user?.position}
                                       </p>
                                     )}
@@ -1038,21 +1073,29 @@ const handleDownloadFiles = async () => {
                                 {/* TOP-LEFT: move handle — small square only */}
                                 <div
                                   title="Drag to move"
-                                  className="absolute top-0 left-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-move z-10 rounded-br"
-                                  style={{ width: HANDLE, height: HANDLE }}
+                                  className="absolute top-0 left-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-move z-10 rounded-br    w-5 h-5 sm:w-2 sm:h-2"
+                                  style={{ touchAction: "none" }}
                                   onMouseDown={e => {
                                     e.preventDefault(); e.stopPropagation();
                                     draggingStamp.current = { startX: e.clientX, startY: e.clientY, origX: sigX, origY: sigY };
                                   }}
+                                  onTouchStart={e => {
+                                    e.preventDefault(); e.stopPropagation();
+                                    const t = e.touches[0];
+                                    draggingStamp.current = { startX: t.clientX, startY: t.clientY, origX: sigX, origY: sigY };
+                                  }}
                                 >
-                                  <span style={{ fontSize: 24, color: "white", lineHeight: 1, userSelect: "none" }}>✥</span>
+                                  <span className="  sm:text-sm " style={{ color: "white", lineHeight: 1, userSelect: "none" }}>✥</span>
                                 </div>
 
                                 {/* BOTTOM-RIGHT: resize handle */}
                                 <div
                                   title="Drag to resize"
-                                  className="absolute bottom-0 right-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-se-resize z-10 rounded-tl"
-                                  style={{ width: HANDLE, height: HANDLE }}
+                                  className="absolute bottom-0 right-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-se-resize z-10 rounded-tl
+                                   w-5 h-5 sm:w-2 sm:h-2
+                            
+                                  "
+                                  style={{ touchAction: "none" }}
                                   onMouseDown={e => {
                                     e.preventDefault(); e.stopPropagation();
                                     resizingStamp.current = {
@@ -1060,8 +1103,16 @@ const handleDownloadFiles = async () => {
                                       origW: sigBoxW, origH: sigBoxH, origY: sigY,
                                     };
                                   }}
+                                  onTouchStart={e => {
+                                    e.preventDefault(); e.stopPropagation();
+                                    const t = e.touches[0];
+                                    resizingStamp.current = {
+                                      startX: t.clientX, startY: t.clientY,
+                                      origW: sigBoxW, origH: sigBoxH, origY: sigY,
+                                    };
+                                  }}
                                 >
-                                  <span style={{ fontSize: 9, color: "white", lineHeight: 1, userSelect: "none" }}>⌟</span>
+                                  <span className=" sm:text-sm " style={{ color: "white", lineHeight: 1, userSelect: "none" }}>⌟</span>
                                 </div>
                               </div>
                             );
@@ -1071,14 +1122,14 @@ const handleDownloadFiles = async () => {
 
                       )}
 
-                    
+
                     </div>
                   )}
 
                   {/* Stamp controls bar */}
                   {canSign && (stampPlaced || placingMode) && (
                     <div className="border-t border-border px-5 py-3 flex flex-wrap items-center gap-x-5 gap-y-2 bg-accent/30">
-                      
+
                       <span className="text-xs font-medium text-muted-foreground">Stamp</span>
                       <label className="flex items-center gap-1.5 text-xs text-foreground">
                         Page
@@ -1086,7 +1137,7 @@ const handleDownloadFiles = async () => {
                           onChange={e => setSigPage(Math.max(1, Number(e.target.value)))}
                           className="w-14 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50" />
                       </label>
-                      
+
                       {stampPlaced && (
                         <>
                           <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -1101,7 +1152,7 @@ const handleDownloadFiles = async () => {
                     </div>
                   )}
 
-                  
+
                 </div>
               ) : (
                 <div className="bg-card border border-border rounded-xl px-5 py-12 flex flex-col items-center gap-3 text-muted-foreground text-sm">
@@ -1167,11 +1218,10 @@ const handleDownloadFiles = async () => {
                               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1.5 px-1">{office}</p>
                               <div className="flex flex-col gap-1.5">
                                 {sigs.map(s => (
-                                  <div key={s.id} className={`rounded-lg border px-3 py-2.5 text-xs ${
-                                    s.status === "signed"   ? "border-green-500/30 bg-green-500/5" :
+                                  <div key={s.id} className={`rounded-lg border px-3 py-2.5 text-xs ${s.status === "signed" ? "border-green-500/30 bg-green-500/5" :
                                     s.status === "rejected" ? "border-destructive/30 bg-destructive/5" :
-                                                              "border-border bg-accent/30"
-                                  }`}>
+                                      "border-border bg-accent/30"
+                                    }`}>
                                     <div className="flex items-center gap-2 flex-wrap">
                                       <span className="w-5 h-5 rounded-full bg-accent text-foreground flex items-center justify-center text-[10px] font-bold shrink-0">{orderToStep[s.order]}</span>
                                       <span className="text-foreground font-medium">{s.user_name}</span>
@@ -1182,11 +1232,10 @@ const handleDownloadFiles = async () => {
                                         <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full font-medium">You</span>
                                       )}
                                       <span className="text-muted-foreground truncate hidden sm:inline">{s.user_email}</span>
-                                      <span className={`ml-auto px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${
-                                        s.status === "signed"   ? "bg-green-500/10 text-green-600" :
+                                      <span className={`ml-auto px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${s.status === "signed" ? "bg-green-500/10 text-green-600" :
                                         s.status === "rejected" ? "bg-destructive/10 text-destructive" :
-                                                                  "bg-yellow-500/10 text-yellow-600"
-                                      }`}>{s.status}</span>
+                                          "bg-yellow-500/10 text-yellow-600"
+                                        }`}>{s.status}</span>
                                     </div>
                                     {s.signed_at && (
                                       <p className="mt-1 text-muted-foreground pl-7">
@@ -1194,9 +1243,8 @@ const handleDownloadFiles = async () => {
                                       </p>
                                     )}
                                     {s.remarks && (
-                                      <p className={`mt-1 pl-7 italic text-xs ${
-                                        s.status === "rejected" ? "text-destructive/80" : "text-muted-foreground"
-                                      }`}>
+                                      <p className={`mt-1 pl-7 italic text-xs ${s.status === "rejected" ? "text-destructive/80" : "text-muted-foreground"
+                                        }`}>
                                         {s.status === "rejected" ? "Reason" : "Remarks"}: {s.remarks}
                                       </p>
                                     )}
@@ -1262,16 +1310,14 @@ const handleDownloadFiles = async () => {
                   <div className="flex rounded-xl border border-border bg-accent/40 p-1 gap-1">
                     <button
                       onClick={() => setSignMode("digital")}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        signMode === "digital" ? "bg-card shadow text-foreground" : "text-muted-foreground hover:text-foreground"
-                      }`}>
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${signMode === "digital" ? "bg-card shadow text-foreground" : "text-muted-foreground hover:text-foreground"
+                        }`}>
                       <Key className="w-3.5 h-3.5" /> Digital (PNPKI)
                     </button>
                     <button
                       onClick={() => setSignMode("manual")}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        signMode === "manual" ? "bg-card shadow text-foreground" : "text-muted-foreground hover:text-foreground"
-                      }`}>
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${signMode === "manual" ? "bg-card shadow text-foreground" : "text-muted-foreground hover:text-foreground"
+                        }`}>
                       <PenLine className="w-3.5 h-3.5" /> Manual / Handwritten
                     </button>
                   </div>
@@ -1319,11 +1365,10 @@ const handleDownloadFiles = async () => {
                                   if (f && f.type === "application/pdf")
                                     setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
                                 }}
-                                className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-5 cursor-pointer transition ${
-                                  manualDragging ? "border-primary bg-primary/5" :
+                                className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-5 cursor-pointer transition ${manualDragging ? "border-primary bg-primary/5" :
                                   uploaded ? "border-green-500/50 bg-green-500/5" :
-                                  "border-border bg-background hover:border-primary/40"
-                                }`}>
+                                    "border-border bg-background hover:border-primary/40"
+                                  }`}>
                                 {uploaded ? (
                                   <>
                                     <CheckCircle2 className="w-5 h-5 text-green-500" />
