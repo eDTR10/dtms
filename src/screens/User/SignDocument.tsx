@@ -8,10 +8,10 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   FileText, CheckCircle2, Key, Upload, AlertTriangle, Download,
   Eye, MousePointer2, Settings2, Loader2, ChevronDown, ChevronUp, XCircle, ShieldOff,
-  ChevronLeft, ChevronRight, PenLine, Printer
+  ChevronLeft, ChevronRight, PenLine, Printer, UserPlus, X, Plus, Save, Users, Link2, Link2Off
 } from "lucide-react";
 import UserLayout from "./UserLayout";
-import { documentApi, signatoryApi, Document, DocumentSignatory, DocumentFile } from "../../services/api";
+import { documentApi, signatoryApi, officeApi, userApi, Document, DocumentSignatory, DocumentFile, Office, SignatoryUser } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
 import DocumentFileList from "../../components/DocumentFileList";
 import SigningOverlay from "@/components/ui/scannerLoader";
@@ -51,6 +51,8 @@ const fileToBase64 = (file: File): Promise<string> =>
 
 const PNPKI_URL = (import.meta.env.VITE_PNPKI_SERVER as string || "").replace(/\/$/, "");
 const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string || "").replace(/\/$/, "");
+
+const ROUTING_PAGE_SIZE = 6;
 
 const SignDocument = () => {
   const { tracknumber } = useParams<{ tracknumber: string }>();
@@ -274,6 +276,147 @@ const SignDocument = () => {
   const [signMode, setSignMode] = useState<"digital" | "manual">("digital");
   const [manualUploading, setManualUploading] = useState(false);
   const [manualDragging, setManualDragging] = useState(false);
+
+  // ── Edit Routing state ──────────────────────────────────────────────────────
+  const [editingRouting, setEditingRouting] = useState(false);
+  const [routingSignatories, setRoutingSignatories] = useState<Array<{
+    user_id: number; user_email: string; user_name: string; order: number;
+    status?: string; // carry over for display
+  }>>([]);
+  const [routingOffices, setRoutingOffices] = useState<Office[]>([]);
+  const [routingUsers, setRoutingUsers] = useState<SignatoryUser[]>([]);
+  const [routingOffice, setRoutingOffice] = useState("");
+  const [routingSearch, setRoutingSearch] = useState("");
+  const [routingPage, setRoutingPage] = useState(0);
+  const [routingSaving, setRoutingSaving] = useState(false);
+
+  // Drag-and-drop for signatories
+  const [draggedSigIdx, setDraggedSigIdx] = useState<number | null>(null);
+
+  const normalizeRoutingOrders = (entries: typeof routingSignatories) => {
+    const normalized: typeof routingSignatories = [];
+    let currentOrder = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const orderVal = typeof entries[i].order === 'number' ? entries[i].order : 0;
+      if (i > 0 && orderVal !== (typeof entries[i - 1].order === 'number' ? entries[i - 1].order : 0)) {
+        currentOrder += 1;
+      }
+      normalized.push({ ...entries[i], order: currentOrder });
+    }
+    return normalized;
+  };
+
+  const toggleParallel = (index: number) => {
+    setRoutingSignatories(prev => {
+      const updated = prev.map(s => ({ ...s }));
+      const above = updated[index - 1];
+      const current = updated[index];
+      if (above.status === "signed" || above.status === "rejected") return prev;
+
+      if (current.order === above.order) {
+        // Split
+        const threshold = current.order;
+        for (let j = index; j < updated.length; j++) {
+          if (updated[j].order >= threshold) updated[j].order += 1;
+        }
+      } else {
+        // Merge
+        current.order = above.order;
+      }
+      return normalizeRoutingOrders(updated);
+    });
+  };
+
+  const moveRoutingSignatory = (index: number, direction: "up" | "down") => {
+    setRoutingSignatories(prev => {
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      if (prev[targetIndex].status === "signed" || prev[targetIndex].status === "rejected") return prev;
+
+      const updated = prev.map(s => ({ ...s }));
+      const [moved] = updated.splice(index, 1);
+      updated.splice(targetIndex, 0, moved);
+      return normalizeRoutingOrders(updated);
+    });
+  };
+
+  const handleSigDragStart = (idx: number) => {
+    setDraggedSigIdx(idx);
+  };
+  const handleSigDragOver = (idx: number, e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (draggedSigIdx === null || draggedSigIdx === idx) return;
+
+    const draggedItem = routingSignatories[draggedSigIdx];
+    const targetItem = routingSignatories[idx];
+    if (
+      draggedItem.status === "signed" || draggedItem.status === "rejected" ||
+      targetItem.status === "signed" || targetItem.status === "rejected"
+    ) {
+      return;
+    }
+
+    setRoutingSignatories(prev => {
+      const arr = [...prev];
+      const [dragged] = arr.splice(draggedSigIdx, 1);
+      arr.splice(idx, 0, dragged);
+      return arr;
+    });
+    setDraggedSigIdx(idx);
+  };
+  const handleSigDragEnd = () => {
+    setDraggedSigIdx(null);
+  };
+
+  const openRoutingEditor = () => {
+    if (!doc) return;
+    // Pre-fill with current signatories, carrying status for display
+    setRoutingSignatories(
+      [...doc.signatories]
+        .sort((a, b) => a.order - b.order)
+        .map(s => ({
+          user_id: s.user_id,
+          user_email: s.user_email,
+          user_name: s.user_name,
+          order: s.order,
+          status: s.status,
+        }))
+    );
+    setEditingRouting(true);
+    // Load offices + users for the picker
+    Promise.all([officeApi.list(), userApi.signatories()]).then(([o, u]) => {
+      setRoutingOffices(o);
+      setRoutingUsers(u);
+    });
+  };
+
+  const filteredRoutingUsers = routingUsers.filter(u => {
+    if (!routingOffice) return false;
+    if (u.office_id !== Number(routingOffice)) return false;
+    if (routingSignatories.some(s => s.user_id === u.id)) return false;
+    const q = routingSearch.toLowerCase();
+    if (!q) return true;
+    return `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) || u.position.toLowerCase().includes(q);
+  });
+  const totalRoutingPages = Math.ceil(filteredRoutingUsers.length / ROUTING_PAGE_SIZE);
+  const pagedRoutingUsers = filteredRoutingUsers.slice(
+    routingPage * ROUTING_PAGE_SIZE,
+    (routingPage + 1) * ROUTING_PAGE_SIZE
+  );
+
+  const handleSaveRouting = async () => {
+    if (!doc) return;
+    setRoutingSaving(true);
+    try {
+      const updated = await documentApi.updateRouting(doc.id, { signatories: routingSignatories });
+      setDoc(updated);
+      setEditingRouting(false);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || "Failed to update routing.");
+    } finally {
+      setRoutingSaving(false);
+    }
+  };
 
   const handleDecline = async () => {
     if (!mySig) return;
@@ -1257,6 +1400,213 @@ const SignDocument = () => {
                       </div>
                     );
                   })()}
+
+                  {/* ── Edit Routing button + inline editor ── */}
+                  {(isOwner || mySig) && !editingRouting && (
+                    <div className="mt-3 pt-3 border-t border-border">
+                      <button
+                        type="button"
+                        onClick={openRoutingEditor}
+                        className="flex items-center gap-2 text-xs font-medium text-primary hover:text-primary/80 transition"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        Edit Routing
+                      </button>
+                    </div>
+                  )}
+
+                  {editingRouting && (
+                    <div className="mt-3 pt-3 border-t border-border flex flex-col gap-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5" /> Edit Routing
+                        </p>
+                        <button type="button" onClick={() => setEditingRouting(false)}
+                          className="text-muted-foreground hover:text-foreground transition p-0.5">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Current signatory list (editable) */}
+                      {routingSignatories.length > 0 && (() => {
+                        const sortedUniqueOrders = [...new Set(routingSignatories.map(s => s.order))].sort((a, b) => a - b);
+                        const stepNum = (order: number) => sortedUniqueOrders.indexOf(order) + 1;
+                        return (
+                          <div className="flex flex-col gap-0">
+                            {routingSignatories.map((s, i) => {
+                              const isLocked = s.status === "signed" || s.status === "rejected";
+                              const isParallelWithAbove = i > 0 && s.order === routingSignatories[i - 1].order;
+                              return (
+                                <div key={s.user_id}>
+                                  {i > 0 && (
+                                    <div className="flex items-center justify-center h-5">
+                                      <button
+                                        type="button"
+                                        title={isParallelWithAbove ? "Click to sign separately (after above)" : "Click to sign at the same time as above"}
+                                        onClick={() => toggleParallel(i)}
+                                        disabled={routingSignatories[i - 1].status === "signed" || routingSignatories[i - 1].status === "rejected"}
+                                        className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${isParallelWithAbove
+                                          ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
+                                          : "bg-accent text-muted-foreground hover:text-foreground"
+                                          }`}
+                                      >
+                                        {isParallelWithAbove
+                                          ? <><Link2 className="w-3 h-3" /> parallel &mdash; click to separate</>
+                                          : <><Link2Off className="w-3 h-3" /> sequential &mdash; click to parallelize</>}
+                                      </button>
+                                    </div>
+                                  )}
+                                  <div
+                                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${isLocked
+                                        ? s.status === "signed"
+                                          ? "bg-green-500/5 border border-green-500/30"
+                                          : "bg-destructive/5 border border-destructive/30"
+                                        : isParallelWithAbove
+                                          ? "bg-blue-500/5 border border-blue-500/20"
+                                          : "bg-accent/50 border border-border"
+                                      } ${draggedSigIdx === i ? 'opacity-60' : ''}`}
+                                    draggable={!isLocked}
+                                    onDragStart={() => { if (!isLocked) handleSigDragStart(i); }}
+                                    onDragOver={(e) => { if (!isLocked) handleSigDragOver(i, e); }}
+                                    onDragEnd={handleSigDragEnd}
+                                    onDrop={handleSigDragEnd}
+                                    style={{ cursor: isLocked ? 'default' : 'move' }}
+                                  >
+                                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${isLocked
+                                        ? s.status === "signed" ? "bg-green-500/20 text-green-700 dark:text-green-400" : "bg-destructive/20 text-destructive"
+                                        : isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
+                                      }`}>
+                                      {stepNum(s.order)}
+                                    </span>
+                                    <span className="text-foreground font-medium truncate flex-1">{s.user_name}</span>
+                                    {isLocked && (
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize ${s.status === "signed" ? "bg-green-500/10 text-green-600" : "bg-destructive/10 text-destructive"
+                                        }`}>{s.status}</span>
+                                    )}
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {!isLocked && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            title="Move earlier"
+                                            onClick={() => moveRoutingSignatory(i, "up")}
+                                            disabled={i === 0 || (i > 0 && (routingSignatories[i - 1].status === "signed" || routingSignatories[i - 1].status === "rejected"))}
+                                            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-background transition disabled:opacity-40 disabled:cursor-not-allowed"
+                                          >
+                                            <ChevronUp className="w-4 h-4" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            title="Move later"
+                                            onClick={() => moveRoutingSignatory(i, "down")}
+                                            disabled={i === routingSignatories.length - 1 || (i < routingSignatories.length - 1 && (routingSignatories[i + 1].status === "signed" || routingSignatories[i + 1].status === "rejected"))}
+                                            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-background transition disabled:opacity-40 disabled:cursor-not-allowed"
+                                          >
+                                            <ChevronDown className="w-4 h-4" />
+                                          </button>
+                                          <button type="button"
+                                            onClick={() => setRoutingSignatories(prev => normalizeRoutingOrders(prev.filter(x => x.user_id !== s.user_id)))}
+                                            className="p-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+                                            title="Remove">
+                                            <X className="w-4 h-4" />
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Add signatory picker */}
+                      <div className="border border-border rounded-lg p-3 flex flex-col gap-2 bg-background/50">
+                        <p className="text-[11px] text-muted-foreground font-medium">Add signatory from an office</p>
+                        <div className="relative">
+                          <select value={routingOffice}
+                            onChange={e => { setRoutingOffice(e.target.value); setRoutingSearch(""); setRoutingPage(0); }}
+                            className="w-full appearance-none rounded-lg border border-border bg-background px-3 py-2 pr-8 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition">
+                            <option value="">— Select office —</option>
+                            {routingOffices.map(o => (
+                              <option key={o.officeID} value={o.officeID}>{o.name}</option>
+                            ))}
+                          </select>
+                          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                        </div>
+
+                        {routingOffice && (
+                          <>
+                            <input type="text" placeholder="Search by name or position..."
+                              value={routingSearch}
+                              onChange={e => { setRoutingSearch(e.target.value); setRoutingPage(0); }}
+                              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition" />
+
+                            <div className="border border-border rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+                              {filteredRoutingUsers.length === 0 ? (
+                                <p className="px-3 py-2 text-xs text-muted-foreground">
+                                  {routingSearch ? "No users match" : "No available users"}
+                                </p>
+                              ) : (
+                                <>
+                                  {pagedRoutingUsers.map(u => (
+                                    <button key={u.id} type="button"
+                                      onClick={() => {
+                                        const maxOrder = routingSignatories.length === 0
+                                          ? 0
+                                          : Math.max(...routingSignatories.map(s => s.order)) + 1;
+                                        setRoutingSignatories(prev => [...prev, {
+                                          user_id: u.id,
+                                          user_email: u.email,
+                                          user_name: `${u.first_name} ${u.last_name}`,
+                                          order: maxOrder,
+                                        }]);
+                                      }}
+                                      className="flex items-center gap-2 w-full px-3 py-2 hover:bg-accent text-left border-b border-border last:border-0 transition text-xs">
+                                      <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold uppercase shrink-0">
+                                        {u.first_name.slice(0, 1)}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="font-medium text-foreground truncate">{u.first_name} {u.last_name}</p>
+                                        <p className="text-[10px] text-muted-foreground truncate">{u.position || u.email}</p>
+                                      </div>
+                                      <Plus className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    </button>
+                                  ))}
+                                  {totalRoutingPages > 1 && (
+                                    <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-accent/30 text-[10px]">
+                                      <span className="text-muted-foreground">
+                                        {routingPage * ROUTING_PAGE_SIZE + 1}–{Math.min((routingPage + 1) * ROUTING_PAGE_SIZE, filteredRoutingUsers.length)} of {filteredRoutingUsers.length}
+                                      </span>
+                                      <div className="flex gap-1">
+                                        <button type="button" onClick={() => setRoutingPage(p => p - 1)} disabled={routingPage === 0}
+                                          className="px-2 py-0.5 rounded border border-border bg-background hover:bg-accent disabled:opacity-40 transition">‹</button>
+                                        <button type="button" onClick={() => setRoutingPage(p => p + 1)} disabled={routingPage >= totalRoutingPages - 1}
+                                          className="px-2 py-0.5 rounded border border-border bg-background hover:bg-accent disabled:opacity-40 transition">›</button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Save / Cancel */}
+                      <div className="flex gap-2">
+                        <button type="button" onClick={handleSaveRouting} disabled={routingSaving}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition disabled:opacity-50">
+                          {routingSaving ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</> : <><Save className="w-3.5 h-3.5" /> Save Routing</>}
+                        </button>
+                        <button type="button" onClick={() => setEditingRouting(false)}
+                          className="px-4 py-2 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:bg-accent transition">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

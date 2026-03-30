@@ -239,6 +239,11 @@ export const documentApi = {
     signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number }>;
   }) => api.post<Document>(`document/${id}/send/`, payload).then(r => r.data),
 
+  /** Update routing — add/remove signatories while preserving signed statuses */
+  updateRouting: (id: number, payload: {
+    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number }>;
+  }) => api.patch<Document>(`document/${id}/update_routing/`, payload).then(r => r.data),
+
   /** Upload signed PDF back to server (single-file, legacy) */
   uploadSigned: (id: number, file: File) => {
     const fd = new FormData();
