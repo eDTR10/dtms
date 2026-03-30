@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, Send, Eye, Clock, CheckCircle2, Search, Download, RefreshCw, Pencil, Trash2, AlertTriangle, Loader2, ChevronLeft, ChevronRight, ChevronDown, GitBranch, Plus, X as XIcon, Link2, Link2Off } from "lucide-react";
+import { FileText, Send, Eye, Clock, CheckCircle2, Search, Download, RefreshCw, Pencil, Trash2, AlertTriangle, Loader2, ChevronLeft, ChevronRight, ChevronDown, GitBranch, Plus, X as XIcon, Link2, Link2Off, PenLine } from "lucide-react";
 import UserLayout from "./UserLayout";
 import { documentApi, officeApi, userApi, Document, Office, SignatoryUser } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
@@ -143,6 +143,24 @@ const MyDocuments = () => {
   const [deleteDoc,  setDeleteDoc]  = useState<Document | null>(null);
   const [deleting,   setDeleting]   = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // ── Batch signing state ──
+  const [selectedTracks, setSelectedTracks] = useState<string[]>([]);
+  const toggleSelect = (track: string) => {
+    setSelectedTracks(prev => prev.includes(track) ? prev.filter(t => t !== track) : [...prev, track]);
+  };
+  const toggleSelectAll = () => {
+    const pageTracks = paginated.map(d => d.tracknumber);
+    const allOnPageSelected = pageTracks.every(t => selectedTracks.includes(t));
+    if (allOnPageSelected) {
+      setSelectedTracks(prev => prev.filter(t => !pageTracks.includes(t)));
+    } else {
+      setSelectedTracks(prev => Array.from(new Set([...prev, ...pageTracks])));
+    }
+  };
+  const selectAllFiltered = () => {
+    setSelectedTracks(filtered.map(d => d.tracknumber));
+  };
 
 const handleDownload = async (doc: Document) => {
   const filesToDownload = doc.files && doc.files.length > 0
@@ -471,12 +489,47 @@ const handleDownload = async (doc: Document) => {
             >{s}</button>
           ))}
         </div>
+
+        {selectedTracks.length > 0 && (
+          <div className="flex flex-col gap-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-blue-700 dark:text-blue-400 ml-2">
+                {selectedTracks.length} document{selectedTracks.length !== 1 ? "s" : ""} selected
+              </span>
+              <button
+                onClick={() => navigate(`/dtms/sign/batch?tracks=${selectedTracks.join(",")}`)}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition shadow-sm"
+              >
+                <PenLine className="w-4 h-4" /> Batch Sign Selected
+              </button>
+              <button
+                onClick={() => setSelectedTracks([])}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+            {selectedTracks.length < filtered.length && (
+              <p className="text-[11px] text-blue-600/80 px-2">
+                Selected from current view. <button onClick={selectAllFiltered} className="font-bold underline hover:text-blue-800">Select all {filtered.length} documents</button> instead?
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Table ── */}
       <div className="bg-card border border-border rounded-xl overflow-hidden min-h-[530px] flex flex-col">
         {/* Header — always visible */}
-        <div className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[2fr_1fr_180px] sm:grid-cols-[2fr_1fr_80px]">
+        <div className="grid grid-cols-[40px_2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3 border-b border-border bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide slg:grid-cols-[40px_2fr_1fr_180px] sm:grid-cols-[40px_2fr_1fr_80px]">
+          <div className="flex items-center justify-center">
+            <input
+              type="checkbox"
+              className="rounded border-border text-primary focus:ring-primary/50 cursor-pointer"
+              checked={paginated.length > 0 && paginated.every(d => selectedTracks.includes(d.tracknumber))}
+              onChange={toggleSelectAll}
+            />
+          </div>
           <span>Document</span>
           <span className="slg:hidden">Track No.</span>
           <span className="slg:hidden">Date</span>
@@ -497,8 +550,16 @@ const handleDownload = async (doc: Document) => {
           paginated.map(doc => (
             <div
               key={doc.id}
-              className="grid grid-cols-[2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[2fr_1fr_180px] sm:grid-cols-[2fr_1fr_80px]"
+              className="grid grid-cols-[40px_2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[40px_2fr_1fr_180px] sm:grid-cols-[40px_2fr_1fr_80px]"
             >
+              <div className="flex items-center justify-center">
+                <input
+                  type="checkbox"
+                  className="rounded border-border text-primary focus:ring-primary/50"
+                  checked={selectedTracks.includes(doc.tracknumber)}
+                  onChange={() => toggleSelect(doc.tracknumber)}
+                />
+              </div>
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
                   <FileText className="w-4 h-4 text-muted-foreground" />

@@ -4,7 +4,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.mjs",
   import.meta.url
 ).href;
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   FileText, CheckCircle2, Key, Upload, AlertTriangle, Download,
   Eye, MousePointer2, Settings2, Loader2, ChevronDown, ChevronUp, XCircle, ShieldOff,
@@ -59,6 +59,12 @@ const SignDocument = () => {
   const { tracknumber } = useParams<{ tracknumber: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  
+  const [searchParams] = useSearchParams();
+  const tracksParam = searchParams.get("tracks");
+  const tracksArray = tracksParam ? tracksParam.split(",").map(t => t.trim()).filter(Boolean) : [];
+  const isBatchMode = tracknumber === "batch" && tracksArray.length > 0;
+  const primaryTrack = isBatchMode ? tracksArray[0] : tracknumber;
 
   const [doc, setDoc] = useState<Document | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,6 +73,7 @@ const SignDocument = () => {
   const [error, setError] = useState<string | null>(null);
   const [signedBlobs, setSignedBlobs] = useState<Array<{ blob: Blob; name: string }>>([]);
   const [selectedFileUrl, setSelectedFileUrl] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<string | null>(null);
 
   // ── Per-file stamp tracking ────────────────────────────────────────────────
   type FileStampConfig = {
@@ -474,9 +481,9 @@ const SignDocument = () => {
   }, [user?.first_name, user?.last_name, user?.position]);
 
   useEffect(() => {
-    if (!tracknumber) return;
+    if (!primaryTrack) return;
     const controller = new AbortController();
-    documentApi.getByTrack(tracknumber, controller.signal)
+    documentApi.getByTrack(primaryTrack, controller.signal)
       .then(d => {
         setDoc(d);
         const firstFile = d.files && d.files.length > 0 ? d.files[0] : null;
@@ -499,7 +506,7 @@ const SignDocument = () => {
       .finally(() => setLoading(false));
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tracknumber]);
+  }, [primaryTrack]);
 
   const handleOverlayEvent = (e: React.MouseEvent<HTMLDivElement>, isClick: boolean) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -670,7 +677,7 @@ const SignDocument = () => {
     const allDocFiles = doc.files || [];
     let filesToSign = allDocFiles.filter(f => fileStampRef.current[f.id]?.placed);
 
-    if (batchSignFile && activeDocFile && stampPlaced) {
+    if ((batchSignFile || isBatchMode) && activeDocFile && stampPlaced) {
       filesToSign = allDocFiles;
       const activeCfg = fileStampRef.current[activeDocFile.id];
       allDocFiles.forEach(f => {
@@ -689,75 +696,93 @@ const SignDocument = () => {
     try {
       const compositeBlob = await buildStampCanvas();
       const tok = localStorage.getItem("auth_token");
-      const uploadFd = new FormData();
 
-      for (let i = 0; i < filesToSign.length; i++) {
-        const docFile = filesToSign[i];
-        const cfg = fileStampRef.current[docFile.id];
+      const tracksToProcess = isBatchMode ? tracksArray : [doc.tracknumber];
 
-        const res = await fetch(docFile.file_url, {
-          headers: tok ? { Authorization: `Token ${tok}` } : {},
-        });
-        if (!res.ok) throw new Error(`Failed to fetch file ${i + 1}: HTTP ${res.status}`);
-        const pdfBlob = await res.blob();
-
-        const xRatio = cfg.sigX / cfg.pdfW;
-        const wRatio = cfg.sigBoxW / cfg.pdfW;
-        const hRatio = cfg.sigBoxH / cfg.pdfH;
-        const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
-
-        const fd = new FormData();
-        fd.append("pdf_file", pdfBlob, `${doc.tracknumber}-${i}.pdf`);
-        fd.append("p12_file", p12File, p12File.name);
-        fd.append("password", password);
-        fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
-        fd.append("sign_note", sigPos || user?.position || "");
-        fd.append("page", String(cfg.sigPage));
-        fd.append("sign_all_pages", batchSignPage ? "true" : "false");
-        fd.append("x_ratio", String(xRatio));
-        fd.append("y_ratio", String(yRatio));
-        fd.append("w_ratio", String(wRatio));
-        fd.append("h_ratio", String(hRatio));
-        if (compositeBlob)
-          fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
-        if (signImage)
-          fd.append("sign_image", signImage, "signature.png");
-
-        const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
-        if (!signRes.ok) {
-          const msg = await signRes.text();
-          throw new Error(msg || `PNPKI server error on file ${i + 1}.`);
+      for (const trackNum of tracksToProcess) {
+        setBatchProgress(trackNum);
+        let currentDoc = doc;
+        if (trackNum !== doc.tracknumber) {
+            try { currentDoc = await documentApi.getByTrack(trackNum); } catch(e) { continue; }
         }
-        const signedPdfBlob = await signRes.blob();
-        const signedName = `${doc.tracknumber}-signed-${i + 1}.pdf`;
-        collected.push({ blob: signedPdfBlob, name: signedName });
+        if (!currentDoc || !currentDoc.files) continue;
 
-        uploadFd.append(`file_${i}`, signedPdfBlob, signedName);
-        uploadFd.append(`file_id_${i}`, String(docFile.id));
+        let curFilesToSign = currentDoc.files.filter(f => fileStampRef.current[f.id]?.placed);
+        if ((isBatchMode || batchSignFile) && activeDocFile && stampPlaced) {
+           curFilesToSign = currentDoc.files;
+        }
+        if (curFilesToSign.length === 0) continue;
+
+        const uploadFd = new FormData();
+        let appendedCount = 0;
+
+        for (let i = 0; i < curFilesToSign.length; i++) {
+          const docFile = curFilesToSign[i];
+          let cfg = fileStampRef.current[docFile.id];
+          if ((isBatchMode || batchSignFile) && activeDocFile) {
+              cfg = fileStampRef.current[activeDocFile.id];
+          }
+          if (!cfg) continue;
+
+          const res = await fetch(docFile.file_url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+          if (!res.ok) throw new Error(`Failed to fetch file ${i + 1} for ${trackNum}: HTTP ${res.status}`);
+          const pdfBlob = await res.blob();
+
+          const xRatio = cfg.sigX / cfg.pdfW;
+          const wRatio = cfg.sigBoxW / cfg.pdfW;
+          const hRatio = cfg.sigBoxH / cfg.pdfH;
+          const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
+
+          const fd = new FormData();
+          fd.append("pdf_file", pdfBlob, `${trackNum}-${i}.pdf`);
+          fd.append("p12_file", p12File, p12File.name);
+          fd.append("password", password);
+          fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
+          fd.append("sign_note", sigPos || user?.position || "");
+          fd.append("page", String(cfg.sigPage));
+          fd.append("sign_all_pages", batchSignPage ? "true" : "false");
+          fd.append("x_ratio", String(xRatio));
+          fd.append("y_ratio", String(yRatio));
+          fd.append("w_ratio", String(wRatio));
+          fd.append("h_ratio", String(hRatio));
+          if (compositeBlob) fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
+          if (signImage) fd.append("sign_image", signImage, "signature.png");
+
+          const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
+          if (!signRes.ok) throw new Error(`PNPKI server error on file ${i + 1} of ${trackNum}.`);
+          
+          const signedPdfBlob = await signRes.blob();
+          const signedName = `${trackNum}-signed-${i + 1}.pdf`;
+          collected.push({ blob: signedPdfBlob, name: signedName });
+
+          uploadFd.append(`file_${appendedCount}`, signedPdfBlob, signedName);
+          uploadFd.append(`file_id_${appendedCount}`, String(docFile.id));
+          appendedCount++;
+        }
+
+        if (appendedCount > 0) {
+          const uploadRes = await fetch(`${SERVER_URL}/document/${currentDoc.id}/sign_files/`, {
+            method: "PATCH", headers: tok ? { Authorization: `Token ${tok}` } : {}, body: uploadFd,
+          });
+          if (!uploadRes.ok) throw new Error(`Upload failed for ${trackNum}`);
+        }
+
+        const curSig = currentDoc.signatories?.find(s => s.user_id === user?.id && String(s.status).toLowerCase() === "pending");
+        if (curSig) {
+          try { await signatoryApi.update(curSig.id, { status: "signed", remarks: signRemarks }); } catch (e) { }
+        }
       }
 
       setSignedBlobs(collected);
-
-      const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
-        method: "PATCH",
-        headers: tok ? { Authorization: `Token ${tok}` } : {},
-        body: uploadFd,
-      });
-      if (!uploadRes.ok) {
-        const txt = await uploadRes.text();
-        throw new Error(`Upload failed: ${uploadRes.status} – ${txt}`);
+      setBatchProgress(null);
+      if (primaryTrack) {
+        const updatedPrimaryDoc = await documentApi.getByTrack(primaryTrack);
+        setDoc(updatedPrimaryDoc);
       }
 
-      const updatedDoc = await uploadRes.json().catch(() => null);
-      if (updatedDoc) setDoc(updatedDoc);
-
-      if (mySig) {
-        try {
-          await signatoryApi.update(mySig.id, { status: "signed", remarks: signRemarks });
-        } catch (e) { }
-      }
       setDone(true);
     } catch (err: any) {
+      setBatchProgress(null);
       setError(err?.message || "Signing failed. Please try again.");
     } finally {
       setSigning(false);
@@ -939,8 +964,38 @@ const SignDocument = () => {
   );
 
   return (
-    <UserLayout title="Sign Document" subtitle={doc ? `${doc.tracknumber} — ${doc.title}` : "Loading..."}>
+    <UserLayout title="Sign Document" subtitle={isBatchMode ? `Batch Signing ${tracksArray.length} Documents` : doc ? `${doc.tracknumber} — ${doc.title}` : "Loading..."}>
       <div className="space-y-1">
+        {isBatchMode && !done && (
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl px-4 py-3 mb-2 flex flex-col gap-1 items-start sm:px-3 text-blue-700 dark:text-blue-400 max-w-2xl">
+            <div className="flex items-center gap-2 w-full">
+              <LayoutGrid className="w-4 h-4 shrink-0" />
+              <div className="text-sm flex-1">
+                <span className="font-semibold">Batch Sign Mode:</span> Selected {tracksArray.length} documents.
+              </div>
+              {signing && batchProgress && (
+                <div className="flex items-center gap-2 text-[11px] font-mono bg-blue-600 text-white px-2 py-0.5 rounded-full animate-pulse">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Signing: {batchProgress}
+                </div>
+              )}
+            </div>
+            {!signing && (
+              <p className="text-xs opacity-90 pl-6">
+                You are viewing the <span className="font-semibold">First Document</span> as a template. The design and placement of your stamp will be automatically replicated on all other selected documents.
+              </p>
+            )}
+            {signing && (
+                <div className="w-full pl-6 mt-1">
+                    <div className="h-1 w-full bg-blue-200 dark:bg-blue-900/40 rounded-full overflow-hidden">
+                        <div 
+                            className="h-full bg-blue-600 transition-all duration-300" 
+                            style={{ width: `${((tracksArray.indexOf(batchProgress || "") + 1) / tracksArray.length) * 100}%` }}
+                        />
+                    </div>
+                </div>
+            )}
+          </div>
+        )}
 
         {/* ── Success state ── */}
         {done && (
