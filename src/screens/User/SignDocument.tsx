@@ -8,7 +8,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   FileText, CheckCircle2, Key, Upload, AlertTriangle, Download,
   Eye, MousePointer2, Settings2, Loader2, ChevronDown, ChevronUp, XCircle, ShieldOff,
-  ChevronLeft, ChevronRight, PenLine, Printer, UserPlus, X, Plus, Save, Users, Link2, Link2Off
+  ChevronLeft, ChevronRight, PenLine, Printer, UserPlus, X, Plus, Save, Users, Link2, Link2Off,
+  Layers, LayoutGrid
 } from "lucide-react";
 import UserLayout from "./UserLayout";
 import { documentApi, signatoryApi, officeApi, userApi, Document, DocumentSignatory, DocumentFile, Office, SignatoryUser } from "../../services/api";
@@ -206,6 +207,8 @@ const SignDocument = () => {
   const [sigBoxW, setSigBoxW] = useState(Number(localStorage.getItem("sig_stamp_width")) || 220);
   const [sigBoxH, setSigBoxH] = useState(Number(localStorage.getItem("sig_stamp_height")) || 80);
   const [sigPage, setSigPage] = useState(1);
+  const [batchSignPage, setBatchSignPage] = useState(false);
+  const [batchSignFile, setBatchSignFile] = useState(false);
 
   useEffect(() => {
     if (pdfDoc) renderPage(pdfDoc, sigPage);
@@ -665,7 +668,16 @@ const SignDocument = () => {
     }
 
     const allDocFiles = doc.files || [];
-    const filesToSign = allDocFiles.filter(f => fileStampRef.current[f.id]?.placed);
+    let filesToSign = allDocFiles.filter(f => fileStampRef.current[f.id]?.placed);
+
+    if (batchSignFile && activeDocFile && stampPlaced) {
+      filesToSign = allDocFiles;
+      const activeCfg = fileStampRef.current[activeDocFile.id];
+      allDocFiles.forEach(f => {
+        fileStampRef.current[f.id] = activeCfg;
+      });
+    }
+
     if (filesToSign.length === 0) {
       setError("Place your signature on at least one document file first.");
       return;
@@ -701,7 +713,7 @@ const SignDocument = () => {
         fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
         fd.append("sign_note", sigPos || user?.position || "");
         fd.append("page", String(cfg.sigPage));
-        fd.append("sign_all_pages", "false");
+        fd.append("sign_all_pages", batchSignPage ? "true" : "false");
         fd.append("x_ratio", String(xRatio));
         fd.append("y_ratio", String(yRatio));
         fd.append("w_ratio", String(wRatio));
@@ -1009,8 +1021,8 @@ const SignDocument = () => {
 
                   {/* Header bar */}
                   <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-muted/30">
-                    <Eye className="w-4 h-4 text-primary" />
-                    <span className="text-sm font-semibold text-foreground">View Document</span>
+                    <Eye className="w-4 h-4 text-primary sm:hidden" />
+                    <span className="text-sm font-semibold text-foreground sm:hidden ">View Document</span>
                     {pdfLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground ml-1" />}
                     {pdfDoc && (
                       <div className="flex items-center gap-1 ml-3">
@@ -1033,12 +1045,14 @@ const SignDocument = () => {
                         </button>
                       </div>
                     )}
+
+
                     <div className="ml-auto flex items-center gap-2">
                       {canSign && pdfBlobUrl && !placingMode && (
                         <button
                           onClick={() => { setPdfVisible(true); setPlacingMode(true); setHoverPx(null); }}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition">
-                          <MousePointer2 className="w-3.5 h-3.5" /> Place Signature
+                          <MousePointer2 className="w-3.5 h-3.5" /> <span className=" sm:hidden">Place Signature</span>
                         </button>
                       )}
                       {canSign && placingMode && (
@@ -1048,6 +1062,34 @@ const SignDocument = () => {
                           Cancel Placement
                         </button>
                       )}
+
+                      {canSign && pdfBlobUrl && (
+                        <div className="flex items-center gap-1.5 bg-card rounded-lg border border-border p-1 shadow-sm mr-2">
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase px-1 sm:hidden">Batch Sign</span>
+                          <button
+                            onClick={() => setBatchSignPage(!batchSignPage)}
+                            title="Apply to all pages in this file"
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition ${batchSignPage
+                              ? "bg-blue-600 text-white shadow"
+                              : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                              }`}
+                          >
+                            <Layers className="w-3.5 h-3.5" /> <span className="sm:hidden">By Page</span>
+                          </button>
+                          <button
+                            onClick={() => setBatchSignFile(!batchSignFile)}
+                            title="Apply to all files in this document"
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition ${batchSignFile
+                              ? "bg-blue-600 text-white shadow"
+                              : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                              }`}
+                          >
+                            <LayoutGrid className="w-3.5 h-3.5" /> <span className="sm:hidden">By File</span>
+                          </button>
+                        </div>
+                      )}
+
+
                       <button
                         onClick={() => {
                           const next = !pdfVisible;
@@ -1231,6 +1273,29 @@ const SignDocument = () => {
                                   <span className="  sm:text-sm " style={{ color: "white", lineHeight: 1, userSelect: "none" }}>✥</span>
                                 </div>
 
+                                {/* TOP-RIGHT: remove stamp button */}
+                                <div
+                                  title="Remove Signature"
+                                  className="absolute top-0 right-0 flex items-center justify-center bg-red-500 hover:bg-red-600 cursor-pointer z-20 rounded-bl w-5 h-5 sm:w-3 sm:h-3 text-white transition-colors"
+                                  onClick={(e) => {
+                                    e.preventDefault(); e.stopPropagation();
+                                    setStampPlaced(false);
+                                    if (activeDocFile) {
+                                      setFileStampsState(prev => {
+                                        const copy = { ...prev };
+                                        if (copy[activeDocFile.id]) copy[activeDocFile.id] = { ...copy[activeDocFile.id], placed: false };
+                                        return copy;
+                                      });
+                                      if (fileStampRef.current[activeDocFile.id]) {
+                                        fileStampRef.current[activeDocFile.id].placed = false;
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <X className="w-3.5 h-3.5 sm:w-2 sm:h-2" />
+                                </div>
+
+
                                 {/* BOTTOM-RIGHT: resize handle */}
                                 <div
                                   title="Drag to resize"
@@ -1281,13 +1346,14 @@ const SignDocument = () => {
                           className="w-14 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50" />
                       </label>
 
+
                       {stampPlaced && (
                         <>
-                          <span className="text-xs text-muted-foreground flex items-center gap-1">
-                            <span className="font-mono text-blue-500">✥</span> top-left to move &nbsp;·&nbsp;
-                            <span className="font-mono text-blue-500">⌟</span> bottom-right to resize
+                          <span className="text-xs text-muted-foreground flex items-center gap-1 ml-auto shrink-0">
+                            <span className="font-mono text-blue-500">✥</span> move &nbsp;·&nbsp;
+                            <span className="font-mono text-blue-500">⌟</span> resize
                           </span>
-                          <span className="text-xs text-muted-foreground font-mono ml-auto">
+                          <span className="text-xs text-muted-foreground font-mono shrink-0">
                             {Math.round(sigBoxW)}×{Math.round(sigBoxH)} &nbsp; x:{Math.round(sigX)} y:{Math.round(sigY)} pg:{sigPage}
                           </span>
                         </>
@@ -1458,12 +1524,12 @@ const SignDocument = () => {
                                   )}
                                   <div
                                     className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs ${isLocked
-                                        ? s.status === "signed"
-                                          ? "bg-green-500/5 border border-green-500/30"
-                                          : "bg-destructive/5 border border-destructive/30"
-                                        : isParallelWithAbove
-                                          ? "bg-blue-500/5 border border-blue-500/20"
-                                          : "bg-accent/50 border border-border"
+                                      ? s.status === "signed"
+                                        ? "bg-green-500/5 border border-green-500/30"
+                                        : "bg-destructive/5 border border-destructive/30"
+                                      : isParallelWithAbove
+                                        ? "bg-blue-500/5 border border-blue-500/20"
+                                        : "bg-accent/50 border border-border"
                                       } ${draggedSigIdx === i ? 'opacity-60' : ''}`}
                                     draggable={!isLocked}
                                     onDragStart={() => { if (!isLocked) handleSigDragStart(i); }}
@@ -1473,8 +1539,8 @@ const SignDocument = () => {
                                     style={{ cursor: isLocked ? 'default' : 'move' }}
                                   >
                                     <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${isLocked
-                                        ? s.status === "signed" ? "bg-green-500/20 text-green-700 dark:text-green-400" : "bg-destructive/20 text-destructive"
-                                        : isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
+                                      ? s.status === "signed" ? "bg-green-500/20 text-green-700 dark:text-green-400" : "bg-destructive/20 text-destructive"
+                                      : isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
                                       }`}>
                                       {stepNum(s.order)}
                                     </span>
