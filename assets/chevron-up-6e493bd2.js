@@ -1,1 +1,0 @@
-import{d as e}from"./index-c3a9ac33.js";const r=e("ChevronUp",[["path",{d:"m18 15-6-6-6 6",key:"153udz"}]]);export{r as C};
