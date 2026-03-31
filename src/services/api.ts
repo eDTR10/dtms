@@ -176,6 +176,12 @@ export const userApi = {
     api.post<UserProfile>("users/", data).then(r => r.data),
   patchMe: (data: Partial<UserProfile>) =>
     api.patch<UserProfile>("users/me/", data).then(r => r.data),
+  /**
+   * Change password for current user using users/user_update/ endpoint.
+   * @param password New password string
+   */
+  changePassword: (password: string) =>
+    api.post("users/change_password/", { password }).then(r => r.data),
 };
 
 // ── Document Templates ────────────────────────────────────────────────────────
