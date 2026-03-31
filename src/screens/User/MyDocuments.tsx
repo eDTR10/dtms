@@ -566,7 +566,7 @@ const handleDownload = async (doc: Document) => {
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
-                  <p className="text-xs text-muted-foreground truncate">{doc.type}</p>
+                  <p className="text-xs text-muted-foreground truncate">{doc.requestor} ({doc.type})</p>
                 </div>
               </div>
               <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>

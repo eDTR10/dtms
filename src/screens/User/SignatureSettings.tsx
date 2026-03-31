@@ -345,6 +345,12 @@ const SignatureSettings = () => {
     }
   };
 
+  // Helper to split displayName by <br/> for custom line breaks
+  const getDisplayNameLines = (name: string) => {
+    if (!name) return [""];
+    return name.split(/<br\s*\/?>(?![^<]*>)/i);
+  };
+
   const handleSave = () => {
     localStorage.setItem("sig_password",        password);
     localStorage.setItem("sig_displayName",     displayName);
@@ -562,11 +568,11 @@ const SignatureSettings = () => {
                             Digitally Signed by: 
                           </p>
                         )}
-                        {displayName && (
-                          <p className="font-bold text-blue-800 leading-tight px-1" style={{ fontSize: designerNameSize }}>
-                            {displayName}
+                        {displayName && getDisplayNameLines(displayName).map((line, i) => (
+                          <p key={i} className="font-bold text-blue-800 leading-tight px-1" style={{ fontSize: designerNameSize }}>
+                            {line}
                           </p>
-                        )}
+                        ))}
                         {position && (
                           <p className="text-blue-600 leading-tight px-1" style={{ fontSize: designerPosSize }}>
                             {position}
@@ -754,9 +760,11 @@ const SignatureSettings = () => {
                                     Digitally Signed by: 
                                   </p>
                                 )}
-                                <p className="font-bold text-blue-900 truncate" style={{ fontSize: Math.max(7, textSize * testRenderScale) }}>
-                                  {displayName}
-                                </p>
+                                {getDisplayNameLines(displayName).map((line, i) => (
+                                  <p key={i} className="font-bold text-blue-900 truncate" style={{ fontSize: Math.max(7, textSize * testRenderScale) }}>
+                                    {line}
+                                  </p>
+                                ))}
                                 {position && (
                                   <p className="text-blue-700 truncate" style={{ fontSize: Math.max(6, (textSize - 2) * testRenderScale) }}>
                                     {position}
@@ -806,9 +814,11 @@ const SignatureSettings = () => {
                                     Digitally Signed by: 
                                   </p>
                                 )}
-                                <p className="font-bold text-blue-900 truncate" style={{ fontSize: Math.max(7, textSize * testRenderScale) }}>
-                                  {displayName}
-                                </p>
+                                {getDisplayNameLines(displayName).map((line, i) => (
+                                  <p key={i} className="font-bold text-blue-900 truncate" style={{ fontSize: Math.max(7, textSize * testRenderScale) }}>
+                                    {line}
+                                  </p>
+                                ))}
                                 {position && (
                                   <p className="text-blue-700 truncate" style={{ fontSize: Math.max(6, (textSize - 2) * testRenderScale) }}>
                                     {position}

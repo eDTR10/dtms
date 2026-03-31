@@ -631,7 +631,13 @@ const SignDocument = () => {
         if (displayName) {
           ctx.font = `bold ${nameFs}px sans-serif`;
           ctx.fillStyle = "#1e3a5f";
-          ctx.fillText(displayName, xPos, nameOffsetY);
+          // Split displayName by <br/> for multi-line support, trim, and decode HTML entities
+          const lines = displayName.split(/<br\s*\/?>(?![^<]*>)/i).map(l => l.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+          let y = nameOffsetY;
+          for (const line of lines) {
+            ctx.fillText(line.trim(), xPos, y);
+            y += nameFs * 1.15;
+          }
         }
         if (sigPos) {
           ctx.font = `${posFs}px sans-serif`;
@@ -1223,7 +1229,7 @@ const SignDocument = () => {
                                     style={{
                                       top: `${sigTxtTop}%`,
                                       left: `${sigTxtLeft}%`,
-                                      whiteSpace: "nowrap",
+                                      whiteSpace: "pre-line",
                                       lineHeight: 1.2,
                                     }}
                                   >
@@ -1233,10 +1239,25 @@ const SignDocument = () => {
                                         Digitally Signed by:
                                       </p>
                                     )}
-                                    <p className="font-bold text-blue-900 text-left truncate px-0.5"
-                                      style={{ fontSize: Math.max(7, textSize * renderScale) }}>
-                                      {displayName || `${user?.first_name} ${user?.last_name}`}
-                                    </p>
+                                    {/* Render displayName with <br/> as line breaks */}
+                                    {(displayName || `${user?.first_name} ${user?.last_name}`)
+                                      .split(/<br\s*\/?>(?![^<]*>)/i)
+                                      .map((line, idx) => (
+                                        <p
+                                          key={idx}
+                                          className="font-bold text-blue-900 text-left px-0.5"
+                                          style={{ fontSize: Math.max(7, textSize * renderScale), margin: 0 }}
+                                        >
+                                          {line
+                                            .replace(/&nbsp;/g, ' ')
+                                            .replace(/&amp;/g, '&')
+                                            .replace(/&lt;/g, '<')
+                                            .replace(/&gt;/g, '>')
+                                            .replace(/&quot;/g, '"')
+                                            .replace(/&#39;/g, "'")
+                                          }
+                                        </p>
+                                      ))}
                                     {(sigPos || user?.position) && (
                                       <p className="text-blue-700 text-left truncate px-0.5"
                                         style={{ fontSize: Math.max(6, (textSize - 2) * renderScale) }}>
@@ -1287,7 +1308,7 @@ const SignDocument = () => {
                                     style={{
                                       top: `${sigTxtTop}%`,
                                       left: `${sigTxtLeft}%`,
-                                      whiteSpace: "nowrap",
+                                      whiteSpace: "pre-line",
                                       lineHeight: 1.2,
                                     }}
                                   >
@@ -1297,10 +1318,25 @@ const SignDocument = () => {
                                         Digitally Signed by:
                                       </p>
                                     )}
-                                    <p className="font-bold text-blue-900 truncate px-0.5"
-                                      style={{ fontSize: Math.max(5, textSize * renderScale * stampContentScale) }}>
-                                      {displayName || `${user?.first_name} ${user?.last_name}`}
-                                    </p>
+                                    {/* Render displayName with <br/> as line breaks */}
+                                    {(displayName || `${user?.first_name} ${user?.last_name}`)
+                                      .split(/<br\s*\/?>(?![^<]*>)/i)
+                                      .map((line, idx) => (
+                                        <p
+                                          key={idx}
+                                          className="font-bold text-blue-900 px-0.5"
+                                          style={{ fontSize: Math.max(5, textSize * renderScale * stampContentScale), margin: 0 }}
+                                        >
+                                          {line
+                                            .replace(/&nbsp;/g, ' ')
+                                            .replace(/&amp;/g, '&')
+                                            .replace(/&lt;/g, '<')
+                                            .replace(/&gt;/g, '>')
+                                            .replace(/&quot;/g, '"')
+                                            .replace(/&#39;/g, "'")
+                                          }
+                                        </p>
+                                      ))}
                                     {(sigPos || user?.position) && (
                                       <p className="text-blue-700 truncate px-0.5"
                                         style={{ fontSize: Math.max(4, (textSize - 2) * renderScale * stampContentScale) }}>
