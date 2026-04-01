@@ -1,13 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Key, Upload, Save, CheckCircle2, FileKey2, Type, Image as ImageIcon, Trash2, MousePointer2, FileText, X, Loader2, Eye } from "lucide-react";
+import { Key, Upload, Save, CheckCircle2, FileKey2, Type, Image as ImageIcon, Trash2, MousePointer2, FileText, X, Loader2, Eye, Lock, Unlock, ZoomIn, ZoomOut } from "lucide-react";
 import UserLayout from "./UserLayout";
 import { useAuth } from "../Auth/AuthContext";
 import * as pdfjsLib from "pdfjs-dist";
+import { buildStampDataUrl } from "./stampUtils";
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).href;
 
 /**
  * Signature Settings — all data is stored in localStorage ONLY.
  * Nothing is sent to the server.
+ *
+ * Stamp rendering is delegated to stampUtils.ts, which is also used by
+ * SignDocument to build the sign_design PNG sent to the Flask /sign-pdf
+ * endpoint.
  */
 
 const fileToBase64 = (file: File): Promise<string> =>
@@ -21,9 +26,8 @@ const fileToBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-// Keep designer proportions tied to the same logical stamp box used in signing.
-const STAMP_BOX_W = 140;
-const STAMP_BOX_H = 50;
+const STAMP_BOX_W    = 140;
+const STAMP_BOX_H    = 50;
 const DESIGNER_BASE_W = 330;
 
 const SignatureSettings = () => {
@@ -32,10 +36,14 @@ const SignatureSettings = () => {
   const [password, setPassword]         = useState(localStorage.getItem("sig_password")    || "");
   const [displayName, setDisplayName]   = useState(localStorage.getItem("sig_displayName") || `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim());
   const [position, setPosition]         = useState(localStorage.getItem("sig_position")    || user?.position || "");
-  const [textSize, setTextSize]         = useState(Number(localStorage.getItem("sig_text_size"))    || 12);
-  const [imgWidth, setImgWidth]         = useState(Number(localStorage.getItem("sig_image_width")) || 150);
+
+  // textSizePct: text height as fraction of stamp height (stored as 0–100 for slider UX)
+  const [textSizePct, setTextSizePct]   = useState(Number(localStorage.getItem("sig_text_size_pct")) || 18);
+  // imgWidthPct: image width as % of stamp width
+  const [imgWidthPct, setImgWidthPct]   = useState(Number(localStorage.getItem("sig_image_width_pct")) || 35);
   const [stampWidth, setStampWidth]     = useState(Number(localStorage.getItem("sig_stamp_width")) || STAMP_BOX_W);
   const [stampHeight, setStampHeight]   = useState(Number(localStorage.getItem("sig_stamp_height")) || STAMP_BOX_H);
+  const [lockRatio, setLockRatio]       = useState(localStorage.getItem("sig_lock_ratio") === "true");
 
   // "Digitally Signed by: " label toggle
   const [showSignedBy, setShowSignedBy] = useState(localStorage.getItem("sig_show_signed_by") === "true");
@@ -56,6 +64,26 @@ const SignatureSettings = () => {
   const [dragging, setDragging] = useState<null | "img" | "txt">(null);
   const stampDesRef = useRef<HTMLDivElement>(null);
 
+  // locked ratio (width/height) — captured only when the user clicks Lock,
+  // never auto-updated so it stays stable while sliders move.
+  const lockedRatio = useRef(stampWidth / Math.max(1, stampHeight));
+
+  const handleStampWidthChange = (val: number) => {
+    setStampWidth(val);
+    if (lockRatio) setStampHeight(Math.round(val / lockedRatio.current));
+  };
+  const handleStampHeightChange = (val: number) => {
+    setStampHeight(val);
+    if (lockRatio) setStampWidth(Math.round(val * lockedRatio.current));
+  };
+  const handleLockRatio = () => {
+    if (!lockRatio) {
+      // Capture current ratio at the moment of locking
+      lockedRatio.current = stampWidth / Math.max(1, stampHeight);
+    }
+    setLockRatio(v => !v);
+  };
+
   // ── Test Sign state ─────────────────────────────────────────────────────
   const [testPdfFile,    setTestPdfFile]    = useState<File | null>(null);
   const [testPdfDoc,     setTestPdfDoc]     = useState<any>(null);
@@ -69,25 +97,37 @@ const SignatureSettings = () => {
   const [testBoxW,   setTestBoxW]   = useState(stampWidth);
   const [testBoxH,   setTestBoxH]   = useState(stampHeight);
   const [testPage,   setTestPage]   = useState(1);
-  const [testPlacing,   setTestPlacing]   = useState(false);
-  const [testPlaced,    setTestPlaced]    = useState(false);
-  const [testHoverPx,   setTestHoverPx]   = useState<{left:number;top:number}|null>(null);
+
+  // Drawing state (Adobe-style drag-to-draw)
+  const [drawState, setDrawState]   = useState<"idle" | "drawing" | "placed">("idle");
+  const drawOrigin = useRef<{x:number;y:number;pdfX:number;pdfY:number}|null>(null);
+  const [drawRect, setDrawRect]     = useState<{left:number;top:number;width:number;height:number}|null>(null);
+
   const [testBaked,     setTestBaked]     = useState<string|null>(null);
   const [testBaking,    setTestBaking]    = useState(false);
-  const testCanvasRef     = useRef<HTMLCanvasElement>(null);
-  const testContainerRef  = useRef<HTMLDivElement>(null);
-  const testRenderTaskRef = useRef<any>(null);
-  const testDraggingStamp = useRef<{startX:number;startY:number;origX:number;origY:number}|null>(null);
-  const testResizingStamp = useRef<{startX:number;startY:number;origW:number;origH:number;origY:number}|null>(null);
+  const testCanvasRef       = useRef<HTMLCanvasElement>(null);
+  const outerTestContainerRef = useRef<HTMLDivElement>(null); // measures available width (zoom-independent)
+  const testContainerRef    = useRef<HTMLDivElement>(null);   // matches canvas size for overlay positioning
+  const testRenderTaskRef   = useRef<any>(null);
 
-  // Convert persisted stamp settings to designer-space pixels for a true WYSIWYG preview.
-  const designerScale        = DESIGNER_BASE_W / Math.max(1, stampWidth);
-  const designerW            = DESIGNER_BASE_W;
-  const designerH            = Math.max(60, Math.round(stampHeight * designerScale));
-  const designerImageWidth   = Math.min((imgWidth / Math.max(1, stampWidth)) * designerW, designerW * 0.9);
-  const designerNameSize     = Math.max(8, textSize * designerScale);
-  const designerPosSize      = Math.max(8, (textSize - 2) * designerScale);
-  const designerSignedBySize = Math.max(7, (textSize - 3) * designerScale);
+  // Zoom state for the test preview
+  const testZoomLevelRef = useRef(1.0);
+  const [testZoomLevel, setTestZoomLevel] = useState(1.0);
+
+  // Drag-move placed stamp
+  const movingStamp = useRef<{startX:number;startY:number;origX:number;origY:number}|null>(null);
+  const resizingStamp = useRef<{startX:number;startY:number;origW:number;origH:number;origY:number}|null>(null);
+
+  // Designer scale: always fill DESIGNER_BASE_W
+  const designerScale      = DESIGNER_BASE_W / Math.max(1, stampWidth);
+  const designerW          = DESIGNER_BASE_W;
+  const designerH          = Math.max(40, Math.round(stampHeight * designerScale));
+
+  // In designer, all sizes are derived from box dims — no independent sliders for font/img size in px
+  const designerImgW       = (imgWidthPct / 100) * designerW;
+  const designerNameSize   = (textSizePct / 100) * designerH || 0.01;
+  const designerPosSize    = (textSizePct / 100) * 0.833 * designerH || 0.01;
+  const designerSignedBySize = (textSizePct / 100) * 0.667 * designerH || 0.01;
 
   useEffect(() => {
     setTestBoxW(stampWidth);
@@ -95,17 +135,18 @@ const SignatureSettings = () => {
     setTestBaked(null);
   }, [stampWidth, stampHeight]);
 
-  const testRenderPage = useCallback(async (doc: any, pageNum: number) => {
-    if (!testCanvasRef.current || !testContainerRef.current) return;
+  const testRenderPage = useCallback(async (doc: any, pageNum: number, zoom?: number) => {
+    if (!testCanvasRef.current || !outerTestContainerRef.current) return;
     if (testRenderTaskRef.current) {
       testRenderTaskRef.current.cancel();
-      try { await testRenderTaskRef.current.promise; } catch (_) { /* RenderingCancelledException — expected */ }
+      try { await testRenderTaskRef.current.promise; } catch (_) {}
       testRenderTaskRef.current = null;
     }
     const page = await doc.getPage(pageNum);
     const vp1  = page.getViewport({ scale: 1 });
-    const cw   = testContainerRef.current.clientWidth || 600;
-    const scale = cw / vp1.width;
+    // Always measure the outer container so zoom doesn't feedback-loop the width
+    const cw   = outerTestContainerRef.current.clientWidth || 600;
+    const scale = (cw / vp1.width) * (zoom ?? testZoomLevelRef.current);
     const vp   = page.getViewport({ scale });
     const canvas = testCanvasRef.current;
     canvas.width  = Math.floor(vp.width);
@@ -114,9 +155,7 @@ const SignatureSettings = () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const task = page.render({ canvasContext: ctx, viewport: vp });
     testRenderTaskRef.current = task;
-    try {
-      await task.promise;
-    } catch (err: any) {
+    try { await task.promise; } catch (err: any) {
       if (err?.name === "RenderingCancelledException") return;
       throw err;
     }
@@ -131,43 +170,126 @@ const SignatureSettings = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [testPage, testPdfDoc]);
 
-  // Global move/up for test stamp drag + resize
+  // ── Global mouse handlers for move/resize of placed stamp ──
   useEffect(() => {
     const clamp = (v:number, lo:number, hi:number) => Math.max(lo, Math.min(hi, v));
     const onMove = (e: MouseEvent) => {
-      if (testDraggingStamp.current) {
-        const { startX, startY, origX, origY } = testDraggingStamp.current;
+      if (movingStamp.current) {
+        const { startX, startY, origX, origY } = movingStamp.current;
         const dx = (e.clientX - startX) / testRenderScale;
         const dy = (e.clientY - startY) / testRenderScale;
         setTestSigX(clamp(origX + dx, 0, testPageWidth  - testBoxW));
         setTestSigY(clamp(origY - dy, 0, testPageHeight - testBoxH));
       }
-      if (testResizingStamp.current) {
-        const { startX, startY, origW, origH, origY } = testResizingStamp.current;
+      if (resizingStamp.current) {
+        const { startX, startY, origW, origH, origY } = resizingStamp.current;
         const dw = (e.clientX - startX) / testRenderScale;
         const dh = (e.clientY - startY) / testRenderScale;
-        setTestBoxW(Math.round(clamp(origW + dw, 40, testPageWidth)));
-        setTestBoxH(Math.round(clamp(origH + dh, 20, testPageHeight)));
-        setTestSigY(clamp(origY - dh, 0, testPageHeight - 20));
+        const newW = Math.round(clamp(origW + dw, 30, testPageWidth));
+        const newH = lockRatio
+          ? Math.round(newW / lockedRatio.current)
+          : Math.round(clamp(origH + dh, 15, testPageHeight));
+        setTestBoxW(newW);
+        setTestBoxH(newH);
+        setTestSigY(clamp(origY - (newH - origH), 0, testPageHeight - 15));
       }
     };
-    const onUp = () => { testDraggingStamp.current = null; testResizingStamp.current = null; };
+    const onUp = () => { movingStamp.current = null; resizingStamp.current = null; };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [testRenderScale, testPageWidth, testPageHeight, testBoxW, testBoxH]);
+  }, [testRenderScale, testPageWidth, testPageHeight, testBoxW, testBoxH, lockRatio]);
+
+  // ── Adobe-style drag-to-draw handlers ──
+  const handleOverlayMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawState !== "idle") return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const pdfX = px / testRenderScale;
+    const pdfY = testPageHeight - py / testRenderScale;
+    drawOrigin.current = { x: px, y: py, pdfX, pdfY };
+    setDrawState("drawing");
+    setDrawRect({ left: px, top: py, width: 0, height: 0 });
+    setTestBaked(null);
+  };
+
+  const handleOverlayMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawState !== "drawing" || !drawOrigin.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const ox = drawOrigin.current.x;
+    const oy = drawOrigin.current.y;
+    let w = px - ox;
+    let h = py - oy;
+    if (lockRatio) {
+      const r = lockedRatio.current;
+      // keep sign, scale smaller axis
+      if (Math.abs(w / r) < Math.abs(h)) {
+        h = w / r;
+      } else {
+        w = h * r;
+      }
+    }
+    setDrawRect({
+      left:   w >= 0 ? ox : ox + w,
+      top:    h >= 0 ? oy : oy + h,
+      width:  Math.abs(w),
+      height: Math.abs(h),
+    });
+  };
+
+  const handleOverlayMouseUp = (_e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawState !== "drawing" || !drawOrigin.current || !drawRect) return;
+    const sc = testRenderScale;
+    const minPx = 20; // minimum box size in screen px
+    if (drawRect.width < minPx || drawRect.height < minPx) {
+      // Too small — cancel
+      setDrawState("idle");
+      setDrawRect(null);
+      drawOrigin.current = null;
+      return;
+    }
+    const newW = Math.round(drawRect.width  / sc);
+    const newH = Math.round(drawRect.height / sc);
+    const newX = drawRect.left / sc;
+    const newY = testPageHeight - (drawRect.top + drawRect.height) / sc;
+    setTestBoxW(Math.max(10, newW));
+    setTestBoxH(Math.max(5,  newH));
+    setTestSigX(Math.max(0, Math.min(testPageWidth  - newW, newX)));
+    setTestSigY(Math.max(0, Math.min(testPageHeight - newH, newY)));
+    setDrawState("placed");
+    setDrawRect(null);
+    drawOrigin.current = null;
+  };
+
+  const handleTestZoomIn = () => {
+    const newZoom = Math.min(3.0, parseFloat((testZoomLevelRef.current + 0.25).toFixed(2)));
+    testZoomLevelRef.current = newZoom;
+    setTestZoomLevel(newZoom);
+    if (testPdfDoc) testRenderPage(testPdfDoc, testPage, newZoom);
+  };
+  const handleTestZoomOut = () => {
+    const newZoom = Math.max(0.5, parseFloat((testZoomLevelRef.current - 0.25).toFixed(2)));
+    testZoomLevelRef.current = newZoom;
+    setTestZoomLevel(newZoom);
+    if (testPdfDoc) testRenderPage(testPdfDoc, testPage, newZoom);
+  };
 
   const handleTestPdfChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setTestPdfFile(file);
     setTestPdfDoc(null);
-    setTestPlaced(false);
-    setTestPlacing(false);
+    setDrawState("idle");
+    setDrawRect(null);
     setTestBaked(null);
     setTestPdfError(null);
     setTestPdfLoading(true);
+    // Reset zoom on new file
+    testZoomLevelRef.current = 1.0;
+    setTestZoomLevel(1.0);
     try {
       const ab = await file.arrayBuffer();
       const loadingTask = pdfjsLib.getDocument({ data: ab });
@@ -182,90 +304,32 @@ const SignatureSettings = () => {
     }
   };
 
-  const handleTestOverlay = (e: React.MouseEvent<HTMLDivElement>, isClick: boolean) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const sc  = testRenderScale;
-    const px  = e.clientX - rect.left;
-    const py  = e.clientY - rect.top;
-    const sw  = testBoxW * sc;
-    const sh  = testBoxH * sc;
-    const left = Math.max(0, Math.min(rect.width  - sw, px - sw / 2));
-    const top  = Math.max(0, Math.min(rect.height - sh, py - sh / 2));
-    if (isClick) {
-      setTestSigX(Math.max(0, Math.min(testPageWidth  - testBoxW, px / sc - testBoxW / 2)));
-      setTestSigY(Math.max(0, Math.min(testPageHeight - testBoxH, testPageHeight - py / sc - testBoxH / 2)));
-      setTestPlaced(true);
-      setTestPlacing(false);
-      setTestHoverPx(null);
-      setTestBaked(null);
-    } else {
-      setTestHoverPx({ left, top });
-    }
-  };
-
-  /** Bake composite stamp image onto a copy of the PDF canvas and show it as a data-URL preview */
+  /** Bake composite stamp image onto a copy of the PDF canvas using stampUtils */
   const handleBakePreview = async () => {
     if (!testPdfDoc || !testCanvasRef.current) return;
     setTestBaking(true);
     try {
-      const W  = 1000;
-      const H  = Math.max(160, Math.round(W * (testBoxH / testBoxW)));
-      const stampCv = document.createElement("canvas");
-      stampCv.width = W; stampCv.height = H;
-      const sCtx = stampCv.getContext("2d")!;
-      const ptToPx      = H / testBoxH;
-      const nameFs      = textSize * ptToPx;
-      const posFs       = Math.max(6, textSize - 2) * ptToPx;
-      const signedByFs  = Math.max(5, textSize - 3) * ptToPx;
-
-      const drawStampText = () => {
-        const ty   = (txtTop / 100) * H;
-        const xPos = (txtLeft / 100) * W;// fixed left padding in canvas pixels
-        // LEFT-aligned text
-        sCtx.textAlign    = "left";
-        sCtx.textBaseline = "top";
-
-        let nameOffsetY = ty;
-        if (showSignedBy) {
-          sCtx.font      = `${signedByFs}px sans-serif`;
-          sCtx.fillStyle = "#64748b";
-          sCtx.fillText("Digitally Signed by: ", xPos, ty);
-          nameOffsetY = ty + signedByFs * 1.4;
-        }
-
-        if (displayName) {
-          sCtx.font      = `bold ${nameFs}px sans-serif`;
-          sCtx.fillStyle = "#1e3a5f";
-          sCtx.fillText(displayName, xPos, nameOffsetY);
-        }
-        if (position) {
-          sCtx.font      = `${posFs}px sans-serif`;
-          sCtx.fillStyle = "#2563EB";
-          sCtx.fillText(position, xPos, nameOffsetY + nameFs * 1.35);
-        }
-      };
-
-      await new Promise<void>(resolve => {
-        if (signImagePreview) {
-          const img = new Image();
-          img.onload = () => {
-            const iw = (imgWidth / testBoxW) * W;
-            const ih = img.naturalHeight * (iw / Math.max(1, img.naturalWidth));
-            const ix = (imgLeft / 100) * W - iw / 2;
-            const iy = (imgTop  / 100) * H;
-            sCtx.drawImage(img, ix, iy, iw, ih);
-            drawStampText();
-            resolve();
-          };
-          img.onerror = () => { drawStampText(); resolve(); };
-          img.src = signImagePreview;
-        } else {
-          drawStampText();
-          resolve();
-        }
+      // 1. Render the stamp at 4× resolution via the shared utility
+      const stampDataUrl = await buildStampDataUrl({
+        signImagePreview,
+        imgTop, imgLeft, imgWidthPct,
+        txtTop, txtLeft,
+        showSignedBy, displayName, position,
+        textSizePct: textSizePct / 100,
+        stampWidthPt:  testBoxW,
+        stampHeightPt: testBoxH,
+        renderScale: 4,
       });
 
-      const pdfCv  = testCanvasRef.current;
+      // 2. Composite over the rendered PDF canvas
+      const stampImg = new Image();
+      await new Promise<void>((resolve, reject) => {
+        stampImg.onload  = () => resolve();
+        stampImg.onerror = reject;
+        stampImg.src     = stampDataUrl;
+      });
+
+      const pdfCv  = testCanvasRef.current!;
       const outCv  = document.createElement("canvas");
       outCv.width  = pdfCv.width;
       outCv.height = pdfCv.height;
@@ -276,7 +340,7 @@ const SignatureSettings = () => {
       const cssTop  = (testPageHeight - testSigY - testBoxH) * testRenderScale;
       const cssW    = testBoxW * testRenderScale;
       const cssH    = testBoxH * testRenderScale;
-      oCtx.drawImage(stampCv, cssLeft, cssTop, cssW, cssH);
+      oCtx.drawImage(stampImg, cssLeft, cssTop, cssW, cssH);
 
       setTestBaked(outCv.toDataURL("image/png"));
     } finally {
@@ -293,15 +357,14 @@ const SignatureSettings = () => {
         if (e.touches.length === 0) return;
         clientX = e.touches[0].clientX;
         clientY = e.touches[0].clientY;
-        // Prevent scrolling while dragging
         if (dragging) e.preventDefault();
       } else {
         clientX = e.clientX;
         clientY = e.clientY;
       }
       const rect = stampDesRef.current.getBoundingClientRect();
-      const pctX = Math.max(5, Math.min(95, ((clientX - rect.left)  / rect.width)  * 100));
-      const pctY = Math.max(0, Math.min(88, ((clientY - rect.top)   / rect.height) * 100));
+      const pctX = Math.max(0, Math.min(100, ((clientX - rect.left)  / rect.width)  * 100));
+      const pctY = Math.max(0, Math.min(95,  ((clientY - rect.top)   / rect.height) * 100));
       if (dragging === "img") { setImgLeft(Math.round(pctX)); setImgTop(Math.round(pctY)); }
       else                    { setTxtLeft(Math.round(pctX)); setTxtTop(Math.round(pctY)); }
     };
@@ -323,10 +386,7 @@ const SignatureSettings = () => {
     if (!file) return;
     setSignImageFile(file);
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string;
-      setSignImagePreview(dataUrl);
-    };
+    reader.onload = (ev) => setSignImagePreview(ev.target?.result as string);
     reader.readAsDataURL(file);
   };
 
@@ -345,7 +405,6 @@ const SignatureSettings = () => {
     }
   };
 
-  // Helper to split displayName by <br/> for custom line breaks
   const getDisplayNameLines = (name: string) => {
     if (!name) return [""];
     return name.split(/<br\s*\/?>(?![^<]*>)/i);
@@ -355,18 +414,17 @@ const SignatureSettings = () => {
     localStorage.setItem("sig_password",        password);
     localStorage.setItem("sig_displayName",     displayName);
     localStorage.setItem("sig_position",        position);
-    localStorage.setItem("sig_text_size",       String(textSize));
-    localStorage.setItem("sig_image_width",     String(imgWidth));
+    localStorage.setItem("sig_text_size_pct",   String(textSizePct));
+    localStorage.setItem("sig_image_width_pct", String(imgWidthPct));
     localStorage.setItem("sig_stamp_width",     String(stampWidth));
     localStorage.setItem("sig_stamp_height",    String(stampHeight));
+    localStorage.setItem("sig_lock_ratio",      String(lockRatio));
     localStorage.setItem("sig_img_top",         String(imgTop));
     localStorage.setItem("sig_img_left",        String(imgLeft));
     localStorage.setItem("sig_txt_top",         String(txtTop));
     localStorage.setItem("sig_txt_left",        String(txtLeft));
     localStorage.setItem("sig_show_signed_by",  String(showSignedBy));
-    if (signImagePreview) {
-      localStorage.setItem("sig_image_data", signImagePreview);
-    }
+    if (signImagePreview) localStorage.setItem("sig_image_data", signImagePreview);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
@@ -374,26 +432,36 @@ const SignatureSettings = () => {
   const handleClear = () => {
     [
       "sig_password","sig_displayName","sig_position","sig_image_data",
-      "sig_p12_data","sig_p12_name","sig_text_size","sig_image_width",
-      "sig_stamp_width","sig_stamp_height",
+      "sig_p12_data","sig_p12_name","sig_text_size_pct","sig_image_width_pct",
+      "sig_stamp_width","sig_stamp_height","sig_lock_ratio",
       "sig_img_top","sig_img_left","sig_txt_top","sig_txt_left",
       "sig_show_signed_by",
     ].forEach(k => localStorage.removeItem(k));
     setPassword(""); setDisplayName(""); setPosition("");
     setSignImagePreview(null); setSignImageFile(null);
     setP12FileName(""); setP12Loaded(false);
-    setTextSize(12); setImgWidth(150);
+    setTextSizePct(18); setImgWidthPct(35);
     setStampWidth(STAMP_BOX_W); setStampHeight(STAMP_BOX_H);
+    setLockRatio(false);
     setImgTop(5); setImgLeft(50); setTxtTop(55); setTxtLeft(50);
     setShowSignedBy(false);
   };
+
+  // ── Stamp preview overlay rendered on canvas for "placed" state ──
+  const placedStampCss = drawState === "placed" ? (() => {
+    const cssLeft = testSigX * testRenderScale;
+    const cssTop  = (testPageHeight - testSigY - testBoxH) * testRenderScale;
+    const cssW    = testBoxW * testRenderScale;
+    const cssH    = testBoxH * testRenderScale;
+    return { cssLeft, cssTop, cssW, cssH };
+  })() : null;
 
   return (
     <UserLayout title="Signature Settings" subtitle="Configure your personal digital signing credentials">
 
       <div className="flex flex-col gap-5">
 
-        {/* Privacy notice — full width */}
+        {/* Privacy notice */}
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-3 flex items-start gap-3">
           <Key className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />
           <p className="text-xs text-foreground">
@@ -461,16 +529,9 @@ const SignatureSettings = () => {
             {/* "Digitally Signed by: " checkbox */}
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">Stamp Label</label>
-              <p className="text-xs text-muted-foreground">
-                Optionally prepend a "Digitally Signed by: " label above your name on the stamp.
-              </p>
               <label className="flex items-start gap-3 rounded-lg border border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition select-none">
-                <input
-                  type="checkbox"
-                  checked={showSignedBy}
-                  onChange={e => setShowSignedBy(e.target.checked)}
-                  className="mt-0.5 w-4 h-4 rounded accent-primary cursor-pointer shrink-0"
-                />
+                <input type="checkbox" checked={showSignedBy} onChange={e => setShowSignedBy(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded accent-primary cursor-pointer shrink-0" />
                 <div className="flex flex-col gap-0.5">
                   <span className="text-sm text-foreground font-medium">Add "Digitally Signed by: " label</span>
                   <span className="text-xs text-muted-foreground leading-snug">
@@ -490,7 +551,7 @@ const SignatureSettings = () => {
               <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
                 <ImageIcon className="w-4 h-4 text-primary" /> Signature Image
               </label>
-              <p className="text-xs text-muted-foreground">Optional PNG/JPG image used as the signature box background. Saved in browser storage.</p>
+              <p className="text-xs text-muted-foreground">Optional PNG/JPG image. Saved in browser storage.</p>
               <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
                 <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
                 <span className="text-sm text-muted-foreground truncate">
@@ -521,17 +582,17 @@ const SignatureSettings = () => {
               <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium text-foreground flex items-center gap-2">
                   Stamp Designer
-                  <span className="text-xs text-muted-foreground font-normal">— drag image &amp; text to position</span>
+                  <span className="text-xs text-muted-foreground font-normal">— drag image &amp; text to reposition</span>
                 </label>
 
                 <div className="flex gap-4 items-start sm:flex-col">
 
-                  {/* Stamp box */}
-                  <div className="shrink-0">
+                  {/* Stamp preview box — zero padding, content fills edge-to-edge */}
+                  <div className="shrink-0 flex flex-col gap-1">
                     <div
                       ref={stampDesRef}
                       className="relative border-2 border-blue-500 rounded-md bg-white overflow-hidden select-none"
-                      style={{ width: designerW, height: designerH }}
+                      style={{ width: designerW, height: designerH, padding: 0 }}
                     >
                       {signImagePreview && (
                         <img
@@ -543,102 +604,103 @@ const SignatureSettings = () => {
                             top:       `${imgTop}%`,
                             left:      `${imgLeft}%`,
                             transform: "translate(-50%, 0)",
-                            width:     designerImageWidth,
-                            maxWidth:  "90%",
+                            width:     designerImgW,
+                            maxWidth:  "100%",
                           }}
                           onMouseDown={e => { e.preventDefault(); setDragging("img"); }}
                           onTouchStart={e => { e.preventDefault(); setDragging("img"); }}
                         />
                       )}
 
-                      {/* ── LEFT-ALIGNED text block ── */}
                       <div
                         className="absolute text-left cursor-grab active:cursor-grabbing"
-                        style={{
-                          top: `${txtTop}%`,
-                          left: `${txtLeft}%`,
-                          whiteSpace: "nowrap",
-                          lineHeight: 1.25,
-                        }}
+                        style={{ top: `${txtTop}%`, left: `${txtLeft}%`, whiteSpace: "nowrap", lineHeight: 1.2 }}
                         onMouseDown={e => { e.preventDefault(); setDragging("txt"); }}
                         onTouchStart={e => { e.preventDefault(); setDragging("txt"); }}
                       >
                         {showSignedBy && (
-                          <p className="text-slate-400 leading-tight px-1" style={{ fontSize: designerSignedBySize }}>
-                            Digitally Signed by: 
+                          <p className="text-slate-400 leading-tight" style={{ fontSize: designerSignedBySize }}>
+                            Digitally Signed by:
                           </p>
                         )}
                         {displayName && getDisplayNameLines(displayName).map((line, i) => (
-                          <p key={i} className="font-bold text-blue-800 leading-tight px-1" style={{ fontSize: designerNameSize }}>
+                          <p key={i} className="font-bold text-blue-800 leading-tight" style={{ fontSize: designerNameSize }}>
                             {line}
                           </p>
                         ))}
                         {position && (
-                          <p className="text-blue-600 leading-tight px-1" style={{ fontSize: designerPosSize }}>
+                          <p className="text-blue-600 leading-tight" style={{ fontSize: designerPosSize }}>
                             {position}
                           </p>
                         )}
                       </div>
                     </div>
-                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
                       <MousePointer2 className="w-3 h-3" />
-                      Drag image or text to reposition — click <span className="font-semibold">Save Settings</span> to keep
+                      Drag to reposition — <span className="font-semibold">Save Settings</span> to keep
                     </p>
                   </div>
 
-                  {/* Sliders */}
-                  <div className="flex flex-col sm:w-full gap-4 flex-1 min-w-0">
+                  {/* Sliders — all proportional (% of stamp dims) */}
+                  <div className="flex flex-col sm:w-full gap-3 flex-1 min-w-0">
 
-                    <div className="flex flex-col gap-1.5  sm:w-full">
+                    {/* Lock ratio toggle */}
+                    <button
+                      onClick={handleLockRatio}
+                      className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border transition self-start ${
+                        lockRatio
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:bg-accent"
+                      }`}
+                    >
+                      {lockRatio ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                      {lockRatio ? "Ratio locked" : "Lock aspect ratio"}
+                    </button>
+
+                    <div className="flex flex-col gap-1.5">
                       <label className="text-xs font-medium text-foreground flex items-center gap-1">
                         <Type className="w-3.5 h-3.5 text-primary" /> Text Size
-                        <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{textSize} pt</span>
+                        <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{textSizePct}% of height</span>
                       </label>
-                      <input type="range" min={4} max={24} step={1} value={textSize}
-                        onChange={e => setTextSize(Number(e.target.value))}
+                      <input type="range" min={5} max={50} step={1} value={textSizePct}
+                        onChange={e => setTextSizePct(Number(e.target.value))}
                         className="w-full accent-primary" />
                       <div className="flex justify-between text-[11px] text-muted-foreground">
-                        <span>4pt</span><span>24pt</span>
+                        <span>5%</span><span>50%</span>
                       </div>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs font-medium text-foreground flex items-center gap-1">
                         <ImageIcon className="w-3.5 h-3.5 text-primary" /> Image Width
-                        <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{imgWidth} px</span>
+                        <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{imgWidthPct}% of stamp</span>
                       </label>
-                      <input type="range" min={10} max={300} step={10} value={imgWidth}
-                        onChange={e => setImgWidth(Number(e.target.value))}
+                      <input type="range" min={5} max={100} step={1} value={imgWidthPct}
+                        onChange={e => setImgWidthPct(Number(e.target.value))}
                         className="w-full accent-primary" />
                       <div className="flex justify-between text-[11px] text-muted-foreground">
-                        <span>10px</span><span>300px</span>
+                        <span>5%</span><span>100%</span>
                       </div>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs font-medium text-foreground flex items-center gap-1">
-                        Stamp Width
+                        Default Stamp Width
                         <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{stampWidth} pt</span>
                       </label>
-                      <input type="range" min={50} max={420} step={10} value={stampWidth}
-                        onChange={e => setStampWidth(Number(e.target.value))}
+                      <input type="range" min={10} max={420} step={1} value={stampWidth}
+                        onChange={e => handleStampWidthChange(Number(e.target.value))}
                         className="w-full accent-primary" />
-                      <div className="flex justify-between text-[11px] text-muted-foreground">
-                        <span>50pt</span><span>420pt</span>
-                      </div>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
                       <label className="text-xs font-medium text-foreground flex items-center gap-1">
-                        Stamp Height
+                        Default Stamp Height
                         <span className="ml-auto font-mono bg-accent px-1.5 py-0.5 rounded text-[11px]">{stampHeight} pt</span>
                       </label>
-                      <input type="range" min={20} max={220} step={5} value={stampHeight}
-                        onChange={e => setStampHeight(Number(e.target.value))}
+                      <input type="range" min={10} max={220} step={1} value={stampHeight}
+                        onChange={e => handleStampHeightChange(Number(e.target.value))}
                         className="w-full accent-primary" />
-                      <div className="flex justify-between text-[11px] text-muted-foreground">
-                        <span>20pt</span><span>220pt</span>
-                      </div>
                     </div>
 
                   </div>
@@ -650,7 +712,7 @@ const SignatureSettings = () => {
             <div className="flex flex-col gap-2 pt-1">
               <label className="text-sm font-medium text-foreground flex items-center gap-2">
                 <Eye className="w-4 h-4 text-primary" /> Test Sign Preview
-                <span className="text-xs text-muted-foreground font-normal">— upload a PDF to see your stamp on it</span>
+                <span className="text-xs text-muted-foreground font-normal">— drag to draw stamp box on PDF</span>
               </label>
 
               {!testPdfDoc && (
@@ -668,24 +730,23 @@ const SignatureSettings = () => {
                 <div className="flex flex-col gap-2">
                   {/* Toolbar */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    {!testPlacing && (
-                      <button
-                        onClick={() => { setTestPlacing(true); setTestHoverPx(null); setTestBaked(null); }}
-                        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition">
-                        <MousePointer2 className="w-3 h-3" /> Place Stamp
-                      </button>
-                    )}
-                    {testPlacing && (
-                      <button onClick={() => { setTestPlacing(false); setTestHoverPx(null); }}
+                    {drawState === "placed" && !testBaked && (
+                      <button onClick={() => { setDrawState("idle"); setTestBaked(null); }}
                         className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:bg-accent transition">
-                        <X className="w-3 h-3" /> Cancel
+                        <X className="w-3 h-3" /> Redraw
                       </button>
                     )}
-                    {testPlaced && !testPlacing && (
+                    {drawState === "placed" && !testBaked && (
                       <button onClick={handleBakePreview} disabled={testBaking}
                         className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition">
                         {testBaking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
                         {testBaking ? "Rendering…" : "Bake Preview"}
+                      </button>
+                    )}
+                    {testBaked && (
+                      <button onClick={() => { setTestBaked(null); setDrawState("idle"); }}
+                        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:bg-accent transition">
+                        <X className="w-3 h-3" /> Reset
                       </button>
                     )}
                     {testPdfDoc && testPdfDoc.numPages > 1 && (
@@ -697,7 +758,21 @@ const SignatureSettings = () => {
                           className="px-2 py-0.5 rounded border border-input disabled:opacity-40 hover:bg-muted transition">→</button>
                       </div>
                     )}
-                    <button onClick={() => { setTestPdfFile(null); setTestPdfDoc(null); setTestPlaced(false); setTestBaked(null); }}
+                    {/* Zoom controls */}
+                    <div className="flex items-center gap-0.5 ml-auto">
+                      <button onClick={handleTestZoomOut} disabled={testZoomLevel <= 0.5}
+                        className="p-1 rounded hover:bg-accent disabled:opacity-30 transition" title="Zoom out">
+                        <ZoomOut className="w-3.5 h-3.5 text-muted-foreground" />
+                      </button>
+                      <span className="text-xs text-muted-foreground font-mono select-none w-10 text-center">
+                        {Math.round(testZoomLevel * 100)}%
+                      </span>
+                      <button onClick={handleTestZoomIn} disabled={testZoomLevel >= 3.0}
+                        className="p-1 rounded hover:bg-accent disabled:opacity-30 transition" title="Zoom in">
+                        <ZoomIn className="w-3.5 h-3.5 text-muted-foreground" />
+                      </button>
+                    </div>
+                    <button onClick={() => { setTestPdfFile(null); setTestPdfDoc(null); setDrawState("idle"); setDrawRect(null); setTestBaked(null); }}
                       className="ml-auto p-1.5 rounded-md border border-border hover:bg-accent transition text-muted-foreground hover:text-destructive">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -713,152 +788,164 @@ const SignatureSettings = () => {
                     </div>
                   )}
 
-                  {/* Live canvas */}
+                  {/* Live canvas + overlay */}
                   {!testBaked && (
-                    <div ref={testContainerRef} className="relative w-full border border-border rounded overflow-hidden bg-gray-100">
+                    <div ref={outerTestContainerRef} className="overflow-x-auto border border-border rounded bg-gray-100">
+                    <div ref={testContainerRef} className="relative" style={{ width: "max-content", minWidth: "100%" }}>
                       {testPdfLoading && (
                         <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground text-sm">
                           <Loader2 className="w-4 h-4 animate-spin" /> Loading PDF…
                         </div>
                       )}
-                      <canvas ref={testCanvasRef} className="block w-full" />
+                      <canvas ref={testCanvasRef} className="block" />
 
-                      {/* Placement overlay */}
-                      {testPlacing && (
-                        <div className="absolute inset-0 cursor-crosshair" style={{ zIndex: 10 }}
-                          onMouseMove={e => handleTestOverlay(e, false)}
-                          onMouseLeave={() => setTestHoverPx(null)}
-                          onClick={e => handleTestOverlay(e, true)}>
-                          <div className="absolute inset-0 bg-black/15 pointer-events-none" />
-                          <div className="absolute top-0 inset-x-0 bg-blue-600/90 text-white text-xs px-3 py-1.5 pointer-events-none flex items-center gap-1.5">
-                            <MousePointer2 className="w-3 h-3" /> Click to place stamp
-                            {testHoverPx && <span className="ml-auto font-mono opacity-75">x:{Math.round(testSigX)} y:{Math.round(testSigY)}</span>}
-                          </div>
-                          {testHoverPx && (
-                            <div className="absolute border-2 border-blue-400 rounded pointer-events-none overflow-hidden"
-                              style={{
-                                left: testHoverPx.left, top: testHoverPx.top,
-                                width: testBoxW * testRenderScale, height: testBoxH * testRenderScale,
-                                background: "rgba(59,130,246,0.15)",
-                              }}>
-                              {signImagePreview && (
-                                <img src={signImagePreview} alt="sig" className="absolute object-contain pointer-events-none"
-                                  style={{
-                                    top: `${imgTop}%`, left: `${imgLeft}%`,
-                                    transform: "translate(-50%,0)",
-                                    width: imgWidth * testRenderScale, maxWidth: "90%",
-                                  }} />
-                              )}
-                              {/* ── LEFT-ALIGNED hover ghost text ── */}
-                              <div className="absolute text-left"
-                                style={{
-                                  top: `${txtTop}%`, left: `${txtLeft}%`,
-                                  whiteSpace: "nowrap", lineHeight: 1.2,
-                                }}>
-                                {showSignedBy && (
-                                  <p className="text-slate-500 truncate" style={{ fontSize: Math.max(6, (textSize - 3) * testRenderScale) }}>
-                                    Digitally Signed by: 
-                                  </p>
-                                )}
-                                {getDisplayNameLines(displayName).map((line, i) => (
-                                  <p key={i} className="font-bold text-blue-900 truncate" style={{ fontSize: Math.max(7, textSize * testRenderScale) }}>
-                                    {line}
-                                  </p>
-                                ))}
-                                {position && (
-                                  <p className="text-blue-700 truncate" style={{ fontSize: Math.max(6, (textSize - 2) * testRenderScale) }}>
-                                    {position}
-                                  </p>
-                                )}
-                              </div>
+                      {/* ── Draw overlay: idle or drawing ── */}
+                      {(drawState === "idle" || drawState === "drawing") && (
+                        <div
+                          className="absolute inset-0 select-none"
+                          style={{ cursor: "crosshair", zIndex: 10 }}
+                          onMouseDown={handleOverlayMouseDown}
+                          onMouseMove={handleOverlayMouseMove}
+                          onMouseUp={handleOverlayMouseUp}
+                        >
+                          {drawState === "idle" && (
+                            <div className="absolute top-0 inset-x-0 bg-blue-600/90 text-white text-xs px-3 py-1.5 pointer-events-none flex items-center gap-1.5">
+                              <MousePointer2 className="w-3 h-3" />
+                              Click and drag to draw the stamp area
+                              {lockRatio && <span className="ml-2 opacity-75">· ratio locked {Math.round(lockedRatio.current * 100) / 100}:1</span>}
                             </div>
+                          )}
+
+                          {/* Live draw rubber-band */}
+                          {drawState === "drawing" && drawRect && (
+                            <>
+                              <div className="absolute inset-0 bg-black/10 pointer-events-none" />
+                              <div
+                                className="absolute border-2 border-blue-500 rounded pointer-events-none overflow-hidden"
+                                style={{
+                                  left: drawRect.left, top: drawRect.top,
+                                  width: drawRect.width, height: drawRect.height,
+                                  background: "rgba(59,130,246,0.12)",
+                                }}
+                              >
+                                {/* Live content preview inside rubber-band */}
+                                {signImagePreview && drawRect.width > 20 && (
+                                  <img src={signImagePreview} alt="sig" className="absolute object-contain pointer-events-none"
+                                    style={{
+                                      top:  `${imgTop}%`,
+                                      left: `${imgLeft}%`,
+                                      transform: "translate(-50%,0)",
+                                      width: `${imgWidthPct}%`,
+                                      maxWidth: "100%",
+                                    }} />
+                                )}
+                                {drawRect.width > 40 && drawRect.height > 20 && (
+                                  <div className="absolute text-left pointer-events-none"
+                                    style={{ top: `${txtTop}%`, left: `${txtLeft}%`, whiteSpace: "nowrap", lineHeight: 1.2 }}>
+                                    {showSignedBy && (
+                                      <p className="text-slate-500" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.667 * drawRect.height) }}>
+                                        Digitally Signed by:
+                                      </p>
+                                    )}
+                                    {getDisplayNameLines(displayName).map((line, i) => (
+                                      <p key={i} className="font-bold text-blue-900" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * drawRect.height) }}>
+                                        {line}
+                                      </p>
+                                    ))}
+                                    {position && (
+                                      <p className="text-blue-700" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.833 * drawRect.height) }}>
+                                        {position}
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Size hint */}
+                                <div className="absolute bottom-0.5 right-1 text-[9px] text-blue-600 font-mono pointer-events-none">
+                                  {Math.round(drawRect.width / testRenderScale)}×{Math.round(drawRect.height / testRenderScale)} pt
+                                </div>
+                              </div>
+                            </>
                           )}
                         </div>
                       )}
 
-                      {/* Confirmed stamp — small corner handles */}
-                      {!testPlacing && testPlaced && (() => {
-                        const cssLeft = testSigX * testRenderScale;
-                        const cssTop  = (testPageHeight - testSigY - testBoxH) * testRenderScale;
-                        const cssW    = testBoxW * testRenderScale;
-                        const cssH    = testBoxH * testRenderScale;
-                        const HANDLE  = 16;
+                      {/* ── Placed stamp with move/resize handles ── */}
+                      {drawState === "placed" && placedStampCss && (() => {
+                        const { cssLeft, cssTop, cssW, cssH } = placedStampCss;
+                        const HANDLE = 16;
                         return (
                           <div
                             className="absolute border-2 border-blue-500 rounded overflow-hidden select-none"
                             style={{
                               left: cssLeft, top: cssTop, width: cssW, height: cssH,
-                              background: "rgba(59,130,246,0.08)", zIndex: 5, pointerEvents: "all",
+                              background: "rgba(59,130,246,0.07)", zIndex: 5,
                             }}
                           >
-                            {/* Stamp content — full box, no padding offset */}
+                            {/* Content — proportional, no padding */}
                             <div className="absolute inset-0 overflow-hidden pointer-events-none">
                               {signImagePreview && (
                                 <img src={signImagePreview} alt="sig" className="absolute object-contain"
                                   style={{
-                                    top: `${imgTop}%`, left: `${imgLeft}%`,
+                                    top:  `${imgTop}%`,
+                                    left: `${imgLeft}%`,
                                     transform: "translate(-50%,0)",
-                                    width: imgWidth * testRenderScale, maxWidth: "90%",
+                                    width: `${imgWidthPct}%`,
+                                    maxWidth: "100%",
                                   }} />
                               )}
-                              {/* ── LEFT-ALIGNED confirmed stamp text ── */}
-                              <div
-                                className="absolute text-left"
-                                style={{
-                                  top: `${txtTop}%`, left: `${txtLeft}%`,
-                                  whiteSpace: "nowrap", lineHeight: 1.2,
-                                }}
-                              >
+                              <div className="absolute text-left"
+                                style={{ top: `${txtTop}%`, left: `${txtLeft}%`, whiteSpace: "nowrap", lineHeight: 1.2 }}>
                                 {showSignedBy && (
-                                  <p className="text-slate-500 truncate" style={{ fontSize: Math.max(6, (textSize - 3) * testRenderScale) }}>
-                                    Digitally Signed by: 
+                                  <p className="text-slate-500" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.667 * cssH) }}>
+                                    Digitally Signed by:
                                   </p>
                                 )}
                                 {getDisplayNameLines(displayName).map((line, i) => (
-                                  <p key={i} className="font-bold text-blue-900 truncate" style={{ fontSize: Math.max(7, textSize * testRenderScale) }}>
+                                  <p key={i} className="font-bold text-blue-900" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * cssH) }}>
                                     {line}
                                   </p>
                                 ))}
                                 {position && (
-                                  <p className="text-blue-700 truncate" style={{ fontSize: Math.max(6, (textSize - 2) * testRenderScale) }}>
+                                  <p className="text-blue-700" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.833 * cssH) }}>
                                     {position}
                                   </p>
                                 )}
                               </div>
                             </div>
 
-                            {/* TOP-LEFT: move handle */}
+                            {/* Move handle — top-left */}
                             <div
                               title="Drag to move"
                               className="absolute top-0 left-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-move z-10 rounded-br"
                               style={{ width: HANDLE, height: HANDLE }}
                               onMouseDown={e => {
                                 e.preventDefault(); e.stopPropagation();
-                                testDraggingStamp.current = { startX: e.clientX, startY: e.clientY, origX: testSigX, origY: testSigY };
+                                movingStamp.current = { startX: e.clientX, startY: e.clientY, origX: testSigX, origY: testSigY };
                               }}
                             >
-                              <span style={{ fontSize: 8, color: "white", lineHeight: 1, userSelect: "none" }}>✥</span>
+                              <span style={{ fontSize: 8, color: "white", userSelect: "none" }}>✥</span>
                             </div>
 
-                            {/* BOTTOM-RIGHT: resize handle */}
+                            {/* Resize handle — bottom-right */}
                             <div
                               title="Drag to resize"
                               className="absolute bottom-0 right-0 flex items-center justify-center bg-blue-600/80 hover:bg-blue-700 cursor-se-resize z-10 rounded-tl"
                               style={{ width: HANDLE, height: HANDLE }}
                               onMouseDown={e => {
                                 e.preventDefault(); e.stopPropagation();
-                                testResizingStamp.current = { startX: e.clientX, startY: e.clientY, origW: testBoxW, origH: testBoxH, origY: testSigY };
+                                resizingStamp.current = { startX: e.clientX, startY: e.clientY, origW: testBoxW, origH: testBoxH, origY: testSigY };
                               }}
                             >
-                              <span style={{ fontSize: 9, color: "white", lineHeight: 1, userSelect: "none" }}>⌟</span>
+                              <span style={{ fontSize: 9, color: "white", userSelect: "none" }}>⌟</span>
                             </div>
                           </div>
                         );
                       })()}
                     </div>
+                    </div>
                   )}
 
-                  {testPlaced && !testPlacing && !testBaked && (
+                  {drawState === "placed" && !testBaked && (
                     <p className="text-xs text-muted-foreground flex items-center gap-1">
                       <span className="font-mono text-blue-500 text-lg">✥</span> top-left to move &nbsp;·&nbsp;
                       <span className="font-mono text-blue-500">⌟</span> bottom-right to resize &nbsp;·&nbsp;
@@ -882,8 +969,8 @@ const SignatureSettings = () => {
             </div>
 
           </div>{/* end RIGHT COLUMN */}
-        </div>{/* end grid */}
-      </div>{/* end outer flex */}
+        </div>
+      </div>
     </UserLayout>
   );
 };

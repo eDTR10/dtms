@@ -322,20 +322,22 @@ const handleDownload = async (doc: Document) => {
 
   useEffect(() => {
     const controller = new AbortController();
+    let tid: ReturnType<typeof setTimeout> | null = null;
     setLoading(true);
     documentApi.myDocs(controller.signal)
       .then(setDocs)
       .catch((err) => { if (err?.code !== "ERR_CANCELED") console.error(err); })
       .finally(() => {
-
-
-        setTimeout(() => setLoading(false), 500);
-      }
-      
-      
-      
-      );
-    return () => controller.abort();
+        // Skip if this request was aborted (component unmounted / StrictMode re-run)
+        // so the stale timer never clobbers a subsequent setLoading(true).
+        if (!controller.signal.aborted) {
+          tid = setTimeout(() => setLoading(false), 500);
+        }
+      });
+    return () => {
+      controller.abort();
+      if (tid !== null) clearTimeout(tid);
+    };
   }, []);
 
   useEffect(() => { setPage(1); }, [search, filter, typeFilter]);
