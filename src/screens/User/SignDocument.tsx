@@ -404,7 +404,8 @@ const SignDocument = () => {
 
   const mySig: DocumentSignatory | undefined = doc?.signatories.find(s => s.user_id === user?.id);
   const isOwner = doc?.userID === user?.id;
-  const canSign = !!doc && (isOwner || mySig?.status === "pending" || mySig?.status === "signed");
+  const isViewer = mySig?.role === "viewer";
+  const canSign = !!doc && !isViewer && (isOwner || mySig?.status === "pending" || mySig?.status === "signed");
 
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
@@ -416,7 +417,7 @@ const SignDocument = () => {
 
   const [editingRouting, setEditingRouting] = useState(false);
   const [routingSignatories, setRoutingSignatories] = useState<Array<{
-    user_id: number; user_email: string; user_name: string; order: number; status?: string;
+    user_id: number; user_email: string; user_name: string; order: number; status?: string; role?: "signer" | "viewer";
   }>>([]);
   const [routingOffices, setRoutingOffices] = useState<Office[]>([]);
   const [routingUsers, setRoutingUsers] = useState<SignatoryUser[]>([]);
@@ -488,7 +489,7 @@ const SignDocument = () => {
     if (!doc) return;
     setRoutingSignatories(
       [...doc.signatories].sort((a, b) => a.order - b.order).map(s => ({
-        user_id: s.user_id, user_email: s.user_email, user_name: s.user_name, order: s.order, status: s.status,
+        user_id: s.user_id, user_email: s.user_email, user_name: s.user_name, order: s.order, status: s.status, role: s.role,
       }))
     );
     setEditingRouting(true);
@@ -1384,8 +1385,9 @@ const SignDocument = () => {
                                       <span className="text-foreground font-medium">{s.user_name}</span>
                                       {s.user_id === doc.userID && <span className="text-[10px] bg-blue-500/10 text-blue-600 px-1.5 py-0.5 rounded-full font-medium">Owner</span>}
                                       {s.user_id === user?.id && <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full font-medium">You</span>}
+                                      {s.role === "viewer" && <span className="text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium">Viewer</span>}
                                       <span className="text-muted-foreground truncate hidden sm:inline">{s.user_email}</span>
-                                      <span className={`ml-auto px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${s.status === "signed" ? "bg-green-500/10 text-green-600" : s.status === "rejected" ? "bg-destructive/10 text-destructive" : "bg-yellow-500/10 text-yellow-600"}`}>{s.status}</span>
+                                      <span className={`ml-auto px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${s.status === "signed" ? "bg-green-500/10 text-green-600" : s.status === "rejected" ? "bg-destructive/10 text-destructive" : s.status === "viewed" ? "bg-amber-500/10 text-amber-600" : "bg-yellow-500/10 text-yellow-600"}`}>{s.status}</span>
                                     </div>
                                     {s.signed_at && <p className="mt-1 text-muted-foreground pl-7">{s.status === "rejected" ? "Declined" : "Signed"} on {fmtSignedAt(s.signed_at)}</p>}
                                     {s.remarks && <p className={`mt-1 pl-7 italic text-xs ${s.status === "rejected" ? "text-destructive/80" : "text-muted-foreground"}`}>{s.status === "rejected" ? "Reason" : "Remarks"}: {s.remarks}</p>}
@@ -1451,6 +1453,7 @@ const SignDocument = () => {
                                   >
                                     <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${isLocked ? s.status === "signed" ? "bg-green-500/20 text-green-700 dark:text-green-400" : "bg-destructive/20 text-destructive" : isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"}`}>{stepNum(s.order)}</span>
                                     <span className="text-foreground font-medium truncate flex-1">{s.user_name}</span>
+                                    {s.role === "viewer" && <span className="text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-medium shrink-0">Viewer</span>}
                                     {isLocked && <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize ${s.status === "signed" ? "bg-green-500/10 text-green-600" : "bg-destructive/10 text-destructive"}`}>{s.status}</span>}
                                     <div className="flex items-center gap-1 shrink-0">
                                       {!isLocked && (
@@ -1502,19 +1505,31 @@ const SignDocument = () => {
                               ) : (
                                 <>
                                   {pagedRoutingUsers.map(u => (
-                                    <button key={u.id} type="button"
-                                      onClick={() => {
-                                        const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
-                                        setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder }]);
-                                      }}
-                                      className="flex items-center gap-2 w-full px-3 py-2 hover:bg-accent text-left border-b border-border last:border-0 transition text-xs">
+                                    <div key={u.id} className="flex items-center gap-2 w-full px-3 py-2 border-b border-border last:border-0 text-xs">
                                       <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold uppercase shrink-0">{u.first_name.slice(0, 1)}</div>
                                       <div className="min-w-0 flex-1">
                                         <p className="font-medium text-foreground truncate">{u.first_name} {u.last_name}</p>
                                         <p className="text-[10px] text-muted-foreground truncate">{u.position || u.email}</p>
                                       </div>
-                                      <Plus className="w-3.5 h-3.5 text-primary shrink-0" />
-                                    </button>
+                                      <div className="flex gap-1 shrink-0">
+                                        <button type="button" title="Add as Signer"
+                                          onClick={() => {
+                                            const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
+                                            setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder, role: "signer" }]);
+                                          }}
+                                          className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 transition text-[10px] font-semibold">
+                                          <Plus className="w-3 h-3" /> Signer
+                                        </button>
+                                        <button type="button" title="Add as Viewer"
+                                          onClick={() => {
+                                            const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
+                                            setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder, role: "viewer" }]);
+                                          }}
+                                          className="flex items-center gap-1 px-2 py-1 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition text-[10px] font-semibold">
+                                          <Eye className="w-3 h-3" /> Viewer
+                                        </button>
+                                      </div>
+                                    </div>
                                   ))}
                                   {totalRoutingPages > 1 && (
                                     <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-accent/30 text-[10px]">
@@ -1579,6 +1594,25 @@ const SignDocument = () => {
                   <p className="text-sm text-foreground">
                     You signed this document{mySig.signed_at ? ` on ${fmtSignedAt(mySig.signed_at)}` : ""}.
                   </p>
+                </div>
+              )}
+
+              {/* Viewer panel */}
+              {isViewer && mySig && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-5 py-4 flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <Eye className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">View Only</p>
+                      <p className="text-xs text-muted-foreground">
+                        You are assigned as a viewer. The document has been automatically marked as viewed and forwarded to the next signatory.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Viewed{mySig.signed_at ? ` on ${fmtSignedAt(mySig.signed_at)}` : ""}
+                  </div>
                 </div>
               )}
 
@@ -1848,7 +1882,7 @@ const SignDocument = () => {
                 </div>
               )}
 
-              {!canSign && !error && doc && !loading && (
+              {!canSign && !isViewer && !error && doc && !loading && (
                 <div className="bg-accent/40 border border-border rounded-xl px-5 py-4 text-sm text-muted-foreground">
                   You are not assigned as a signatory for this document.
                 </div>

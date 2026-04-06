@@ -161,6 +161,7 @@ const RoutingModal = ({
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [addOffice, setAddOffice]     = useState<string>("");
   const [addUser, setAddUser]         = useState<string>("");
+  const [addRole, setAddRole]         = useState<"signer" | "viewer">("signer");
   const [adding, setAdding]           = useState(false);
   const [saving, setSaving]           = useState(false);
 
@@ -193,6 +194,7 @@ const RoutingModal = ({
       const nextOrder = steps.length === 0 ? 0 : Math.max(...steps.map(s => s.order)) + 1;
       const step = await templateRoutingApi.add(template.id, {
         order:         nextOrder,
+        role:          addRole,
         office_id:     office.officeID,
         office_name:   office.name,
         user_id:       user.id,
@@ -398,6 +400,14 @@ const RoutingModal = ({
                       </p>
                     </div>
 
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                      step.role === "viewer"
+                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                        : "bg-primary/10 text-primary"
+                    }`}>
+                      {step.role === "viewer" ? "Viewer" : "Signer"}
+                    </span>
+
                     <button
                       onClick={() => handleRemove(step)}
                       className="p-1 rounded text-muted-foreground hover:text-destructive transition shrink-0"
@@ -445,6 +455,33 @@ const RoutingModal = ({
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               </div>
+
+              {/* Role toggle */}
+              <div className="flex rounded-lg border border-border overflow-hidden text-sm">
+                <button
+                  type="button"
+                  onClick={() => setAddRole("signer")}
+                  className={`flex-1 py-2 font-medium transition ${
+                    addRole === "signer"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background text-muted-foreground hover:bg-accent"
+                  }`}
+                >
+                  Signer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddRole("viewer")}
+                  className={`flex-1 py-2 font-medium transition ${
+                    addRole === "viewer"
+                      ? "bg-amber-500 text-white"
+                      : "bg-background text-muted-foreground hover:bg-accent"
+                  }`}
+                >
+                  Viewer
+                </button>
+              </div>
+
               <button
                 onClick={handleAdd}
                 disabled={!addUser || !addOffice || adding}

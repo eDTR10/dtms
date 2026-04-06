@@ -57,6 +57,7 @@ export interface TemplateRouting {
   id: number;
   template: number;
   order: number;
+  role: "signer" | "viewer";
   office_id: number;
   office_name: string;
   user_id: number;
@@ -83,7 +84,8 @@ export interface DocumentSignatory {
   user_name: string;
   user_office: string;
   order: number;
-  status: "pending" | "signed" | "rejected";
+  role: "signer" | "viewer";
+  status: "pending" | "signed" | "rejected" | "viewed";
   signed_at: string | null;
   remarks: string;
 }
@@ -242,12 +244,12 @@ export const documentApi = {
   /** Route to office + assign signatories */
   send: (id: number, payload: {
     to_office?: number;
-    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number }>;
+    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number; role?: "signer" | "viewer" }>;
   }) => api.post<Document>(`document/${id}/send/`, payload).then(r => r.data),
 
   /** Update routing — add/remove signatories while preserving signed statuses */
   updateRouting: (id: number, payload: {
-    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number }>;
+    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number; role?: "signer" | "viewer" }>;
   }) => api.patch<Document>(`document/${id}/update_routing/`, payload).then(r => r.data),
 
   /** Upload signed PDF back to server (single-file, legacy) */
@@ -287,7 +289,7 @@ export const documentApi = {
 // ── Signatory ─────────────────────────────────────────────────────────────────
 
 export const signatoryApi = {
-  update: (id: number, payload: { status: "signed" | "rejected"; remarks?: string }) =>
+  update: (id: number, payload: { status: "signed" | "rejected" | "viewed"; remarks?: string }) =>
     api.patch<DocumentSignatory>(`document/signatory/${id}/`, payload).then(r => r.data),
 };
 

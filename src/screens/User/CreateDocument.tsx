@@ -17,6 +17,7 @@ interface SignatoryEntry {
   user_email: string;
   user_name: string;
   order: number;
+  role: "signer" | "viewer";
 }
 
 const PAGE_SIZE = 8;
@@ -141,8 +142,7 @@ const CreateDocument = () => {
                   user_id: step.user_id,
                   user_email: step.user_email,
                   user_name: step.user_name,
-                  order: step.order,
-                }))
+                  order: step.order,                  role: step.role ?? "signer",                }))
             )
           );
           setFromTemplate(true);
@@ -159,7 +159,7 @@ const CreateDocument = () => {
   };
 
   // ── Signatory helpers ─────────────────────────────────────────────────────
-  const addSignatory = (u: SignatoryUser) => {
+  const addSignatory = (u: SignatoryUser, role: "signer" | "viewer" = "signer") => {
     if (signatories.some(s => s.user_id === u.id)) return;
     setSignatories(prev => [
       ...prev,
@@ -168,6 +168,7 @@ const CreateDocument = () => {
         user_email: u.email,
         user_name: `${u.first_name} ${u.last_name}`,
         order: prev.length === 0 ? 0 : Math.max(...prev.map(s => s.order)) + 1,
+        role,
       },
     ]);
     setFromTemplate(false);
@@ -296,7 +297,7 @@ const CreateDocument = () => {
       if (signatories.length > 0) {
         // Normalize signatory orders before sending
         const normalizedSignatories = normalizeSignatoryOrders(signatories);
-        await documentApi.send(doc.id, { signatories: normalizedSignatories });
+        await documentApi.send(doc.id, { signatories: normalizedSignatories.map(s => ({ ...s, role: s.role ?? "signer" })) });
       }
 
       navigate(`/dtms/user/documents`);
@@ -579,6 +580,13 @@ const CreateDocument = () => {
                               <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"
                                 }`}>{stepNum(s.order)}</span>
                               <p className="text-sm font-medium text-foreground truncate flex-1">{s.user_name}</p>
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                                s.role === "viewer"
+                                  ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                                  : "bg-primary/10 text-primary"
+                              }`}>
+                                {s.role === "viewer" ? "Viewer" : "Signer"}
+                              </span>
                               <div className="flex items-center gap-1 shrink-0">
                                 <button
                                   type="button"
@@ -660,7 +668,24 @@ const CreateDocument = () => {
                                     {u.position || u.email}
                                   </p>
                                 </div>
-                                <Plus className="w-4 h-4 text-primary shrink-0" />
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    title="Add as Signer"
+                                    onClick={e => { e.stopPropagation(); addSignatory(u, "signer"); }}
+                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition"
+                                  >
+                                    <Plus className="w-3 h-3" /> Signer
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Add as Viewer"
+                                    onClick={e => { e.stopPropagation(); addSignatory(u, "viewer"); }}
+                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition"
+                                  >
+                                    <Plus className="w-3 h-3" /> Viewer
+                                  </button>
+                                </div>
                               </button>
                             ))}
 

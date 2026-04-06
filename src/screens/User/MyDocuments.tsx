@@ -15,25 +15,36 @@ const STATUS_COLOR: Record<string, string> = {
 
 const statusLabel = (doc: Document, currentUserId?: number): string => {
   const sigs     = doc.signatories ?? [];
-  const total    = sigs.length;
-  const signed   = sigs.filter(s => s.status === "signed").length;
-  const rejected = sigs.filter(s => s.status === "rejected").length;
+  const signers  = sigs.filter(s => s.role !== "viewer");
+  const total    = signers.length;
+  const signed   = signers.filter(s => s.status === "signed").length;
+  const rejected = signers.filter(s => s.status === "rejected").length;
   const isOwner  = doc.userID === currentUserId;
   const isSignatory = sigs.some(s => s.user_id === currentUserId);
   const hasSigned = sigs.some(s => s.user_id === currentUserId && s.status === "signed");
+  const allSigned = total > 0 && signed === total;
 
   if (doc.status === "Pending") return "For Sending";
+  if (doc.status === "Rejected") return `Rejected (${rejected}/${total})`;
+  if (allSigned || doc.status === "Completed") {
+    if (isOwner) return `Completed (${signed}/${total})`;
+    if (isSignatory && hasSigned) return `Signed (${signed}/${total})`;
+    return `Completed (${signed}/${total})`;
+  }
   if (doc.status === "For Signing") {
     if (isSignatory && hasSigned) return `Signed (${signed}/${total})`;
     return `For Signing (${signed}/${total})`;
   }
-  if (doc.status === "Completed") {
-    if (isOwner) return `Completed (${signed}/${total})`;
-    if (isSignatory && hasSigned) return `Signed (${signed}/${total})`;
-    return `Signed (${signed}/${total})`;
-  }
-  if (doc.status === "Rejected") return `Rejected (${rejected}/${total})`;
   return doc.status;
+};
+
+const statusBadgeClass = (doc: Document): string => {
+  if (doc.status === "Rejected") return STATUS_COLOR["Rejected"];
+  if (doc.status === "Pending")  return STATUS_COLOR["For Sending"];
+  const signers  = (doc.signatories ?? []).filter(s => s.role !== "viewer");
+  const allSigned = signers.length > 0 && signers.every(s => s.status === "signed");
+  if (allSigned || doc.status === "Completed") return STATUS_COLOR["Completed"];
+  return STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground";
 };
 
 const PAGE_SIZE = 8;
@@ -573,7 +584,7 @@ const handleDownload = async (doc: Document) => {
               </div>
               <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>
               <p className="text-sm text-muted-foreground slg:hidden">{doc.datesubmitted}</p>
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground"}`}>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${statusBadgeClass(doc)}`}>
                 {statusLabel(doc, user?.id)}
               </span>
               <div className="flex items-center sm:items-end gap-1.5 w-full">
