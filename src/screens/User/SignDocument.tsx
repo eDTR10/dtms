@@ -410,6 +410,9 @@ const SignDocument = () => {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
   const [signRemarks, setSignRemarks] = useState("");
+  const [viewerComment, setViewerComment] = useState("");
+  const [viewerCommentSaving, setViewerCommentSaving] = useState(false);
+  const [viewerCommentSaved, setViewerCommentSaved] = useState(false);
   const [declining, setDeclining] = useState(false);
   const [signMode, setSignMode] = useState<"digital" | "manual">("digital");
   const [manualUploading, setManualUploading] = useState(false);
@@ -1612,6 +1615,42 @@ const SignDocument = () => {
                   <div className="flex items-center gap-2 text-sm text-amber-700 dark:text-amber-400">
                     <CheckCircle2 className="w-4 h-4" />
                     Viewed{mySig.signed_at ? ` on ${fmtSignedAt(mySig.signed_at)}` : ""}
+                  </div>
+                  {/* Comment box */}
+                  <div className="flex flex-col gap-2 pt-1 border-t border-amber-500/20">
+                    <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Leave a comment (optional)</p>
+                    {mySig.remarks && !viewerCommentSaved ? (
+                      <p className="text-xs text-muted-foreground italic">Your comment: &ldquo;{mySig.remarks}&rdquo;</p>
+                    ) : null}
+                    <textarea
+                      rows={3}
+                      value={viewerComment}
+                      onChange={e => { setViewerComment(e.target.value); setViewerCommentSaved(false); }}
+                      placeholder={mySig.remarks ? mySig.remarks : "Optional remarks or feedback..."}
+                      className="w-full rounded-lg border border-amber-500/30 bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500/40 resize-none transition"
+                    />
+                    <button
+                      onClick={async () => {
+                        if (!mySig) return;
+                        setViewerCommentSaving(true);
+                        try {
+                          await signatoryApi.update(mySig.id, { status: "viewed", remarks: viewerComment });
+                          setViewerCommentSaved(true);
+                        } catch (e) {
+                          console.error(e);
+                        } finally {
+                          setViewerCommentSaving(false);
+                        }
+                      }}
+                      disabled={viewerCommentSaving || viewerComment.trim() === ""}
+                      className="self-end flex items-center gap-2 px-4 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium transition disabled:opacity-50"
+                    >
+                      {viewerCommentSaving
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
+                        : viewerCommentSaved
+                          ? <><CheckCircle2 className="w-3.5 h-3.5" /> Saved</>
+                          : "Save Comment"}
+                    </button>
                   </div>
                 </div>
               )}
