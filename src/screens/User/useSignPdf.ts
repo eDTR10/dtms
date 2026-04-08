@@ -123,7 +123,7 @@ export function useSignPdf(): UseSignPdfReturn {
         ...stampOpts,
         stampWidthPt:  boxW,
         stampHeightPt: boxH,
-        renderScale: 4,  // 4× → ~288 dpi for a 72 dpi PDF
+        renderScale: 8,  // 8× → ~576 dpi for a 72 dpi PDF (sharp up to ~600% zoom)
       });
 
       // ── 3. Convert stamp position → page ratios ──────────────────────────

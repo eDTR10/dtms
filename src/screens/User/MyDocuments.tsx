@@ -38,6 +38,14 @@ const statusLabel = (doc: Document, currentUserId?: number): string => {
   return doc.status;
 };
 
+const statusLabelShort = (doc: Document, currentUserId?: number): string => {
+  const full = statusLabel(doc, currentUserId);
+  const match = full.match(/\(\d+\/\d+\)/);
+  if (match) return match[0];
+  if (full === "For Sending") return "Send";
+  return full;
+};
+
 const statusBadgeClass = (doc: Document): string => {
   if (doc.status === "Rejected") return STATUS_COLOR["Rejected"];
   if (doc.status === "Pending")  return STATUS_COLOR["For Sending"];
@@ -117,6 +125,8 @@ const MyDocuments = () => {
   const [typeDropOpen, setTypeDropOpen] = useState(false);
   const typeDropRef                    = useRef<HTMLDivElement>(null);
   const [page, setPage]               = useState(1);
+  const isIdleRef                      = useRef(true);
+  const idleTimerRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -125,6 +135,19 @@ const MyDocuments = () => {
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  useEffect(() => {
+    const onMove = () => {
+      isIdleRef.current = false;
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => { isIdleRef.current = true; }, 2000);
+    };
+    document.addEventListener("mousemove", onMove);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
   }, []);
 
   const [downloading, setDownloading] = useState<number | null>(null);
@@ -351,6 +374,16 @@ const handleDownload = async (doc: Document) => {
     };
   }, []);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isIdleRef.current) return;
+      documentApi.myDocs()
+        .then(setDocs)
+        .catch(err => { if (err?.code !== "ERR_CANCELED") console.error(err); });
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => { setPage(1); }, [search, filter, typeFilter]);
 
   const statuses  = ["All", "For Sending", "For Signing", "Completed", "Signed", "Rejected"];
@@ -574,18 +607,44 @@ const handleDownload = async (doc: Document) => {
                 />
               </div>
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
+                <div className=" sm:hidden w-8 h-8 shrink-0 rounded-lg bg-accent flex items-center justify-center">
                   <FileText className="w-4 h-4 text-muted-foreground" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{doc.title}</p>
                   <p className="text-xs text-muted-foreground truncate">{doc.requestor} ({doc.type})</p>
+                  {(() => {
+                    if (!doc.files || doc.files.length <= 1) return null;
+                    const mySig = doc.signatories?.find(s => s.user_id === user?.id);
+                    if (!mySig || mySig.role === "viewer") return null;
+                    if (mySig.status === "pending") {
+                      return (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                          <span className="sm:hidden">{doc.files.length} files — sign all of them</span>
+                          <span className="hidden sm:inline">Sign all {doc.files.length} files</span>
+                        </span>
+                      );
+                    }
+                    if (mySig.status === "signed" && doc.files.some(f => f.file_type === "original")) {
+                      const unsignedCount = doc.files.filter(f => f.file_type === "original").length;
+                      return (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-orange-500">
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                          <span className="sm:hidden">{unsignedCount} file{unsignedCount !== 1 ? "s" : ""} may be unsigned — open to verify</span>
+                          <span className="hidden sm:inline">{unsignedCount} unsigned</span>
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               </div>
               <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>
               <p className="text-sm text-muted-foreground slg:hidden">{doc.datesubmitted}</p>
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${statusBadgeClass(doc)}`}>
-                {statusLabel(doc, user?.id)}
+                <span className="sm:hidden">{statusLabel(doc, user?.id)}</span>
+                <span className="hidden sm:inline">{statusLabelShort(doc, user?.id)}</span>
               </span>
               <div className="flex items-center sm:items-end gap-1.5 w-full">
                 <button
