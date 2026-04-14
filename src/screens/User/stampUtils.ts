@@ -44,6 +44,19 @@ export interface StampOpts {
   displayName:  string;
   position:     string;
 
+  /** Font family for all stamp text (CSS font-family string) */
+  fontFamily?:     string;
+  /** Italicise all stamp text */
+  isItalic?:       boolean;
+  /** Bold the display name text */
+  isBold?:         boolean;
+  /** Color of the display name text */
+  nameColor?:      string;
+  /** Color of the position/title text */
+  positionColor?:  string;
+  /** Color of the "Digitally Signed by:" label */
+  signedByColor?:  string;
+
   /**
    * Text size as a fraction of stamp *height* (0 – 1).
    * Stored in localStorage as 0–100 (textSizePct); divide by 100 when
@@ -87,6 +100,12 @@ export function getStampOptsFromStorage(): StampOpts {
     textSizePct:  n("sig_text_size_pct",     18) / 100,
     stampWidthPt:  n("sig_stamp_width",     140),
     stampHeightPt: n("sig_stamp_height",     50),
+    fontFamily:    s("sig_font_family",  "Inter, sans-serif"),
+    isItalic:      s("sig_is_italic") === "true",
+    isBold:        s("sig_is_bold") !== "false",
+    nameColor:     s("sig_name_color",   "#1e3a5f"),
+    positionColor: s("sig_pos_color",    "#2563eb"),
+    signedByColor: s("sig_signed_by_color", "#64748b"),
   };
 }
 
@@ -113,6 +132,12 @@ function _draw(
     const {
       signImagePreview, imgTop, imgLeft, imgWidthPct,
       txtTop, txtLeft, showSignedBy, displayName, position, textSizePct,
+      fontFamily    = "Inter, sans-serif",
+      isItalic      = false,
+      isBold        = true,
+      nameColor     = "#1e3a5f",
+      positionColor = "#2563EB",
+      signedByColor = "#64748b",
     } = opts;
 
     // Font sizes are proportional to stamp height
@@ -128,24 +153,24 @@ function _draw(
 
       let nameY = ty;
       if (showSignedBy) {
-        ctx.font      = `${signedByFs}px sans-serif`;
-        ctx.fillStyle = "#64748b";
+        ctx.font      = `${isItalic ? "italic " : ""}${signedByFs}px ${fontFamily}`;
+        ctx.fillStyle = signedByColor;
         ctx.fillText("Digitally Signed by: ", tx, ty);
         nameY = ty + signedByFs * 1.4;
       }
 
       const nameLines = splitDisplayName(displayName);
       if (displayName) {
-        ctx.font      = `bold ${nameFs}px sans-serif`;
-        ctx.fillStyle = "#1e3a5f";
+        ctx.font      = `${isItalic ? "italic " : ""}${isBold ? "bold " : ""}${nameFs}px ${fontFamily}`;
+        ctx.fillStyle = nameColor;
         nameLines.forEach((line, i) => {
           ctx.fillText(line, tx, nameY + i * nameFs * 1.3);
         });
       }
 
       if (position) {
-        ctx.font      = `${posFs}px sans-serif`;
-        ctx.fillStyle = "#2563EB";
+        ctx.font      = `${isItalic ? "italic " : ""}${posFs}px ${fontFamily}`;
+        ctx.fillStyle = positionColor;
         ctx.fillText(position, tx, nameY + nameLines.length * nameFs * 1.3);
       }
     };

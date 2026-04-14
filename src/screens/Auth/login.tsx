@@ -116,9 +116,9 @@ const Login = () => {
               </button>
 
               <div className="flex justify-center">
-                <a href="#" className="text-xs text-muted-foreground hover:text-primary hover:underline transition-colors">
+                <Link to="/dtms/forgot-password" className="text-xs text-muted-foreground hover:text-primary hover:underline transition-colors">
                   Forgot your password?
-                </a>
+                </Link>
               </div>
             </form>
           </div>

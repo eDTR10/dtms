@@ -10,6 +10,7 @@ import {
   UserCircle,
   LayoutTemplate,
   Building2,
+  FolderKanban,
 } from "lucide-react";
 import viteLogo from "/logo.png";
 import { authApi } from "../../services/api";
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { label: "Documents", icon: <FileText className="w-4 h-4" />,        to: "/dtms/admin/documents" },
   { label: "Templates", icon: <LayoutTemplate className="w-4 h-4" />,  to: "/dtms/admin/templates" },
   { label: "Offices",   icon: <Building2 className="w-4 h-4" />,       to: "/dtms/admin/offices" },
+  { label: "Projects",  icon: <FolderKanban className="w-4 h-4" />,    to: "/dtms/admin/projects" },
   { label: "Settings",  icon: <Settings className="w-4 h-4" />,        to: "/dtms/admin/settings" },
   { label: "Profile",   icon: <UserCircle className="w-4 h-4" />,      to: "/dtms/admin/profile" },
 ];

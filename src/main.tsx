@@ -23,6 +23,8 @@ const Page2 = lazy(() =>
 
 const Login = lazy(() => import("./screens/Auth/login.tsx"));
 const Register = lazy(() => import("./screens/Auth/Register.tsx"));
+const ForgotPassword = lazy(() => import("./screens/Auth/ForgotPassword.tsx"));
+const ResetPassword = lazy(() => import("./screens/Auth/ResetPassword.tsx"));
 
 // ── Admin pages ───────────────────────────────────────────────────────────
 const AdminDashboard  = lazy(() => import("./screens/Admin/Dashboard.tsx"));
@@ -60,6 +62,22 @@ const router = createBrowserRouter([
     element: (
       <Suspense fallback={<Loader />}>
         <Register />
+      </Suspense>
+    ),
+  },
+  {
+    path: "/dtms/forgot-password",
+    element: (
+      <Suspense fallback={<Loader />}>
+        <ForgotPassword />
+      </Suspense>
+    ),
+  },
+  {
+    path: "/dtms/reset-password/:uid/:token",
+    element: (
+      <Suspense fallback={<Loader />}>
+        <ResetPassword />
       </Suspense>
     ),
   },

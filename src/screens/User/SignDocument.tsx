@@ -7,7 +7,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   FileText, CheckCircle2, Key, Upload, AlertTriangle, Download,
-  Eye, MousePointer2, Settings2, Loader2, ChevronDown, ChevronUp, XCircle, ShieldOff,
+  Eye, MousePointer2,  Loader2, ChevronDown, ChevronUp, XCircle, ShieldOff,
   ChevronLeft, ChevronRight, PenLine, Printer, UserPlus, X, Plus, Save, Users, Link2, Link2Off,
   Layers, LayoutGrid, ZoomIn, ZoomOut
 } from "lucide-react";
@@ -38,16 +38,7 @@ const base64ToFile = (b64: string, filename: string, mime: string): File => {
   return new File([arr], filename, { type: mime });
 };
 
-const fileToBase64 = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const s = r.result as string;
-      resolve(s.includes(",") ? s.split(",")[1] : s);
-    };
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
+
 
 const PNPKI_URL = (import.meta.env.VITE_PNPKI_SERVER as string || "").replace(/\/$/, "");
 const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string || "").replace(/\/$/, "");
@@ -73,6 +64,12 @@ interface StampPreviewProps {
   txtTop: number;
   txtLeft: number;
   textSizePct: number; // 0–100
+  fontFamily?: string;
+  isItalic?: boolean;
+  isBold?: boolean;
+  nameColor?: string;
+  positionColor?: string;
+  signedByColor?: string;
 }
 
 const StampPreview = ({
@@ -84,6 +81,12 @@ const StampPreview = ({
   fallbackName,
   imgTop, imgLeft, imgWidthPct,
   txtTop, txtLeft, textSizePct,
+  fontFamily = "Inter, sans-serif",
+  isItalic = false,
+  isBold = true,
+  nameColor = "#1e3a5f",
+  positionColor = "#2563EB",
+  signedByColor = "#64748b",
 }: StampPreviewProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -120,23 +123,23 @@ const StampPreview = ({
 
       let nameY = ty;
       if (showSignedBy) {
-        ctx.font      = `${signedByFs}px sans-serif`;
-        ctx.fillStyle = "#64748b";
+        ctx.font      = `${isItalic ? "italic " : ""}${signedByFs}px ${fontFamily}`;
+        ctx.fillStyle = signedByColor;
         ctx.fillText("Digitally Signed by:", tx, ty);
         nameY = ty + signedByFs * 1.4;
       }
 
       if (nameLines.length) {
-        ctx.font      = `bold ${nameFs}px sans-serif`;
-        ctx.fillStyle = "#1e3a5f";
+        ctx.font      = `${isItalic ? "italic " : ""}${isBold ? "bold " : ""}${nameFs}px ${fontFamily}`;
+        ctx.fillStyle = nameColor;
         nameLines.forEach((line, i) => {
           ctx.fillText(line, tx, nameY + i * nameFs * 1.3);
         });
       }
 
       if (sigPos) {
-        ctx.font      = `${posFs}px sans-serif`;
-        ctx.fillStyle = "#2563EB";
+        ctx.font      = `${isItalic ? "italic " : ""}${posFs}px ${fontFamily}`;
+        ctx.fillStyle = positionColor;
         ctx.fillText(sigPos, tx, nameY + nameLines.length * nameFs * 1.3);
       }
     };
@@ -157,7 +160,8 @@ const StampPreview = ({
       drawText();
     }
   }, [cssW, cssH, signImagePreview, displayName, sigPos, showSignedBy,
-      fallbackName, imgTop, imgLeft, imgWidthPct, txtTop, txtLeft, textSizePct]);
+      fallbackName, imgTop, imgLeft, imgWidthPct, txtTop, txtLeft, textSizePct,
+      fontFamily, isItalic, isBold, nameColor, positionColor, signedByColor]);
 
   return (
     <canvas
@@ -204,7 +208,6 @@ const SignDocument = () => {
   const [manualSignedFiles, setManualSignedFiles] = useState<Record<number, File>>({});
 
   const [pdfVisible, setPdfVisible] = useState(true);
-  const [credOpen, setCredOpen] = useState(false);
   const [placingMode, setPlacingMode] = useState(false);
   const [hoverPx, setHoverPx] = useState<{ left: number; top: number } | null>(null);
   const [stampPlaced, setStampPlaced] = useState(false);
@@ -311,7 +314,7 @@ const SignDocument = () => {
 
   // ── Credentials ───────────────────────────────────────────────────────────
   const [p12File, setP12File] = useState<File | null>(null);
-  const [p12FileName, setP12FileName] = useState("");
+  const [_p12FileName, setP12FileName] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [sigPos, setSigPos] = useState("");
@@ -326,6 +329,14 @@ const SignDocument = () => {
   const [txtTop,      setTxtTop]      = useState(Number(localStorage.getItem("sig_txt_top"))          || 55);
   const [txtLeft,     setTxtLeft]     = useState(Number(localStorage.getItem("sig_txt_left"))         || 50);
   const [textSizePct, setTextSizePct] = useState(Number(localStorage.getItem("sig_text_size_pct"))   || 18);
+
+  // ── Font style + colors (from Signature Settings) ─────────────────────────
+  const [fontFamily,    _setFontFamily]    = useState(localStorage.getItem("sig_font_family")      || "Inter, sans-serif");
+  const [isItalic,      _setIsItalic]      = useState(localStorage.getItem("sig_is_italic") === "true");
+  const [isBold,        _setIsBold]        = useState(localStorage.getItem("sig_is_bold") !== "false");
+  const [nameColor,     _setNameColor]     = useState(localStorage.getItem("sig_name_color")       || "#1e3a5f");
+  const [positionColor, _setPositionColor] = useState(localStorage.getItem("sig_pos_color")        || "#2563eb");
+  const [signedByColor, _setSignedByColor] = useState(localStorage.getItem("sig_signed_by_color")  || "#64748b");
 
   // ── Stamp sizing ──────────────────────────────────────────────────────────
   const [sigX, setSigX] = useState(170);
@@ -674,25 +685,8 @@ const SignDocument = () => {
     loadPdf(newFile.file_url, { force: true });
   };
 
-  const handleP12Change = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setP12File(file); setP12FileName(file.name);
-    try { const b64 = await fileToBase64(file); localStorage.setItem("sig_p12_data", b64); localStorage.setItem("sig_p12_name", file.name); } catch { }
-  };
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setSignImage(file);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      setSignImagePreview(dataUrl);
-      localStorage.setItem("sig_image_data", dataUrl);
-    };
-    reader.readAsDataURL(file);
-  };
+
 
   // ── Build composite stamp blob for backend using shared stampUtils ─────────
   const buildStampCanvas = (): Promise<Blob | null> => {
@@ -713,6 +707,12 @@ const SignDocument = () => {
       stampWidthPt:  sigBoxW,
       stampHeightPt: sigBoxH,
       renderScale: qualityScale,
+      fontFamily,
+      isItalic,
+      isBold,
+      nameColor,
+      positionColor,
+      signedByColor,
     });
   };
 
@@ -1235,6 +1235,12 @@ const SignDocument = () => {
                                     txtTop={txtTop}
                                     txtLeft={txtLeft}
                                     textSizePct={textSizePct}
+                                    fontFamily={fontFamily}
+                                    isItalic={isItalic}
+                                    isBold={isBold}
+                                    nameColor={nameColor}
+                                    positionColor={positionColor}
+                                    signedByColor={signedByColor}
                                   />
                                 </div>
                               )}
@@ -1299,6 +1305,12 @@ const SignDocument = () => {
                                     txtTop={txtTop}
                                     txtLeft={txtLeft}
                                     textSizePct={textSizePct}
+                                    fontFamily={fontFamily}
+                                    isItalic={isItalic}
+                                    isBold={isBold}
+                                    nameColor={nameColor}
+                                    positionColor={positionColor}
+                                    signedByColor={signedByColor}
                                   />
                                 </div>
 
@@ -1785,158 +1797,11 @@ const SignDocument = () => {
                     </div>
                   )}
 
-                  {/* Digital sign */}
+              
                   {signMode === "digital" && (
                     <>
                       <div className="bg-card border border-border rounded-xl overflow-hidden">
-                        <button onClick={() => setCredOpen(v => !v)}
-                          className="w-full flex items-center gap-2 px-5 py-3.5 text-sm font-medium text-foreground hover:bg-accent/50 transition">
-                          <Settings2 className="w-4 h-4 text-primary" />
-                          <span>Signing Credentials</span>
-                          {p12File && <span className="ml-2 text-[10px] bg-green-500/10 text-green-600 px-2 py-0.5 rounded-full">P12 loaded</span>}
-                          <span className="ml-auto text-[10px] bg-yellow-500/10 text-yellow-600 px-2 py-0.5 rounded-full">Local only</span>
-                          <span className="text-muted-foreground ml-2">{credOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</span>
-                        </button>
-                        {credOpen && (
-                          <div className="border-t border-border px-5 py-4 flex flex-col gap-4">
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-sm font-medium text-foreground">P12 / PFX Certificate <span className="text-destructive">*</span></label>
-                              <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
-                                <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
-                                <span className="text-sm truncate">
-                                  {p12FileName ? <span className="text-foreground">{p12FileName}</span> : <span className="text-muted-foreground">Click to select .p12 / .pfx — auto-saved for next time</span>}
-                                </span>
-                                <input type="file" accept=".p12,.pfx" className="hidden" onChange={handleP12Change} />
-                              </label>
-                            </div>
-
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-sm font-medium text-foreground">P12 Password <span className="text-destructive">*</span></label>
-                              <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                                placeholder="Enter your P12 password"
-                                className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-sm font-medium text-foreground">Display Name</label>
-                                <input value={displayName} onChange={e => setDisplayName(e.target.value)}
-                                  placeholder={fallbackName}
-                                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-                              </div>
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-sm font-medium text-foreground">Position / Title</label>
-                                <input value={sigPos} onChange={e => setSigPos(e.target.value)}
-                                  placeholder={user?.position ?? "Your position"}
-                                  className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
-                              </div>
-                            </div>
-
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-sm font-medium text-foreground">Signature Image <span className="text-muted-foreground font-normal">(optional — auto-saved)</span></label>
-                              <label className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-background px-4 py-3 cursor-pointer hover:border-primary/50 transition">
-                                <Upload className="w-4 h-4 text-muted-foreground shrink-0" />
-                                <span className="text-sm text-muted-foreground truncate">
-                                  {signImage ? signImage.name : signImagePreview ? "signature.png (saved)" : "Click to upload PNG/JPG"}
-                                </span>
-                                <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handleImageChange} />
-                              </label>
-                              {signImagePreview && (
-                                <img src={signImagePreview} alt="sig preview" className="mt-1 h-12 object-contain border border-border rounded-lg bg-white p-1" />
-                              )}
-                            </div>
-
-                            <label className="flex items-center gap-3 cursor-pointer">
-                              <input type="checkbox" checked={showSignedBy}
-                                onChange={e => { setShowSignedBy(e.target.checked); localStorage.setItem("sig_show_signed_by", String(e.target.checked)); }}
-                                className="w-4 h-4 rounded border-border accent-primary" />
-                              <span className="text-sm text-foreground">Show "Digitally signed by:" label</span>
-                            </label>
-
-                            {/* Live stamp preview */}
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Stamp Preview</label>
-                              <div
-                                className="relative rounded border border-dashed border-blue-400 bg-white overflow-hidden"
-                                style={{ width: "100%", height: 72 }}
-                              >
-                                <StampPreview
-                                  cssW={280}
-                                  cssH={72}
-                                  signImagePreview={signImagePreview}
-                                  displayName={displayName}
-                                  sigPos={sigPos}
-                                  showSignedBy={showSignedBy}
-                                  fallbackName={fallbackName}
-                                  imgTop={imgTop}
-                                  imgLeft={imgLeft}
-                                  imgWidthPct={imgWidthPct}
-                                  txtTop={txtTop}
-                                  txtLeft={txtLeft}
-                                  textSizePct={textSizePct}
-                                />
-                              </div>
-                              <p className="text-[10px] text-muted-foreground">This is how your stamp will appear on the document.</p>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-medium text-foreground flex items-center">
-                                  Text Size
-                                  <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{textSizePct}%</span>
-                                </label>
-                                <input type="range" min={5} max={50} step={1} value={textSizePct}
-                                  onChange={e => {
-                                    const n = Number(e.target.value);
-                                    setTextSizePct(n);
-                                    localStorage.setItem("sig_text_size_pct", String(n));
-                                  }}
-                                  className="w-full accent-primary" />
-                              </div>
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-medium text-foreground flex items-center">
-                                  Image Width
-                                  <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{imgWidthPct}%</span>
-                                </label>
-                                <input type="range" min={5} max={100} step={1} value={imgWidthPct}
-                                  onChange={e => {
-                                    const n = Number(e.target.value);
-                                    setImgWidthPct(n);
-                                    localStorage.setItem("sig_image_width_pct", String(n));
-                                  }}
-                                  className="w-full accent-primary" />
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-1">
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-medium text-foreground flex items-center">
-                                  Stamp Width
-                                  <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{sigBoxW} pt</span>
-                                </label>
-                                <input type="range" min={20} max={420} step={5} value={sigBoxW}
-                                  onChange={e => {
-                                    const n = Number(e.target.value);
-                                    setSigBoxW(n);
-                                    localStorage.setItem("sig_stamp_width", String(n));
-                                  }}
-                                  className="w-full accent-primary" />
-                              </div>
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-xs font-medium text-foreground flex items-center">
-                                  Stamp Height
-                                  <span className="ml-auto font-mono bg-accent px-2 py-0.5 rounded text-xs">{sigBoxH} pt</span>
-                                </label>
-                                <input type="range" min={10} max={220} step={5} value={sigBoxH}
-                                  onChange={e => {
-                                    const n = Number(e.target.value);
-                                    setSigBoxH(n);
-                                    localStorage.setItem("sig_stamp_height", String(n));
-                                  }}
-                                  className="w-full accent-primary" />
-                              </div>
-                            </div>
-                          </div>
-                        )}
+                    
                       </div>
 
                       {error && (
@@ -1974,7 +1839,7 @@ const SignDocument = () => {
                         </p>
                       )}
                       <p className="text-[11px] text-muted-foreground text-center">
-                        Your P12 certificate and password are used only in your browser and are never sent to our server.
+                        Your P12 certificate and password are used only in your browser and are never sent to our server. If you wish to change your Digital Signature, you may go to the Settings.
                       </p>
                     </>
                   )}

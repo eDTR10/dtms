@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Key, Upload, Save, CheckCircle2, FileKey2, Type, Image as ImageIcon, Trash2, MousePointer2, FileText, X, Loader2, Eye, Lock, Unlock, ZoomIn, ZoomOut } from "lucide-react";
+import { Key, Upload, Save, CheckCircle2, FileKey2, Type, Image as ImageIcon, Trash2, MousePointer2, FileText, X, Loader2, Eye, Lock, Unlock, ZoomIn, ZoomOut, ChevronDown } from "lucide-react";
 import UserLayout from "./UserLayout";
 import { useAuth } from "../Auth/AuthContext";
 import * as pdfjsLib from "pdfjs-dist";
@@ -30,6 +30,20 @@ const STAMP_BOX_W    = 140;
 const STAMP_BOX_H    = 50;
 const DESIGNER_BASE_W = 330;
 
+const FONT_OPTIONS = [
+  { value: "Inter, sans-serif",           label: "Inter" },
+  { value: "Arial, sans-serif",          label: "Arial" },
+  { value: "'Times New Roman', serif",   label: "Times New Roman" },
+  { value: "Georgia, serif",             label: "Georgia" },
+  { value: "Verdana, sans-serif",        label: "Verdana" },
+  { value: "'Trebuchet MS', sans-serif", label: "Trebuchet MS" },
+  { value: "'Courier New', monospace",   label: "Courier New" },
+  { value: "'Brush Script MT', cursive", label: "Brush Script MT" },
+  { value: "'Segoe Script', cursive",    label: "Segoe Script" },
+  { value: "'Segoe Script Bold', cursive", label: "Segoe Script Bold" },
+  { value: "'Comic Sans MS', cursive",   label: "Comic Sans MS" },
+];
+
 const SignatureSettings = () => {
   const { user } = useAuth();
 
@@ -47,6 +61,17 @@ const SignatureSettings = () => {
 
   // "Digitally Signed by: " label toggle
   const [showSignedBy, setShowSignedBy] = useState(localStorage.getItem("sig_show_signed_by") === "true");
+
+  // Font style + colors
+  const [fontFamily, setFontFamily]           = useState(localStorage.getItem("sig_font_family")       || "Inter, sans-serif");
+  const [isItalic, setIsItalic]               = useState(localStorage.getItem("sig_is_italic") === "true");
+  const [isBold, setIsBold]                   = useState(localStorage.getItem("sig_is_bold") !== "false");
+  const [nameColor, setNameColor]             = useState(localStorage.getItem("sig_name_color")         || "#1e3a5f");
+  const [positionColor, setPositionColor]     = useState(localStorage.getItem("sig_pos_color")          || "#2563eb");
+  const [signedByColor, setSignedByColor]     = useState(localStorage.getItem("sig_signed_by_color")   || "#64748b");
+
+  const [fontDropdownOpen, setFontDropdownOpen] = useState(false);
+  const fontDropdownRef = useRef<HTMLDivElement>(null);
 
   const [signImagePreview, setSignImagePreview] = useState<string | null>(localStorage.getItem("sig_image_data") || null);
   const [signImageFile, setSignImageFile]       = useState<File | null>(null);
@@ -319,6 +344,12 @@ const SignatureSettings = () => {
         stampWidthPt:  testBoxW,
         stampHeightPt: testBoxH,
         renderScale: 4,
+        fontFamily,
+        isItalic,
+        isBold,
+        nameColor,
+        positionColor,
+        signedByColor,
       });
 
       // 2. Composite over the rendered PDF canvas
@@ -347,6 +378,17 @@ const SignatureSettings = () => {
       setTestBaking(false);
     }
   };
+
+  // Close font dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (fontDropdownRef.current && !fontDropdownRef.current.contains(e.target as Node)) {
+        setFontDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   // Mouse and touch drag handler for stamp designer
   useEffect(() => {
@@ -424,6 +466,12 @@ const SignatureSettings = () => {
     localStorage.setItem("sig_txt_top",         String(txtTop));
     localStorage.setItem("sig_txt_left",        String(txtLeft));
     localStorage.setItem("sig_show_signed_by",  String(showSignedBy));
+    localStorage.setItem("sig_font_family",       fontFamily);
+    localStorage.setItem("sig_is_italic",         String(isItalic));
+    localStorage.setItem("sig_is_bold",           String(isBold));
+    localStorage.setItem("sig_name_color",        nameColor);
+    localStorage.setItem("sig_pos_color",         positionColor);
+    localStorage.setItem("sig_signed_by_color",   signedByColor);
     if (signImagePreview) localStorage.setItem("sig_image_data", signImagePreview);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
@@ -435,7 +483,8 @@ const SignatureSettings = () => {
       "sig_p12_data","sig_p12_name","sig_text_size_pct","sig_image_width_pct",
       "sig_stamp_width","sig_stamp_height","sig_lock_ratio",
       "sig_img_top","sig_img_left","sig_txt_top","sig_txt_left",
-      "sig_show_signed_by",
+      "sig_show_signed_by","sig_font_family","sig_is_italic","sig_is_bold","sig_name_color",
+      "sig_pos_color","sig_signed_by_color",
     ].forEach(k => localStorage.removeItem(k));
     setPassword(""); setDisplayName(""); setPosition("");
     setSignImagePreview(null); setSignImageFile(null);
@@ -445,6 +494,12 @@ const SignatureSettings = () => {
     setLockRatio(false);
     setImgTop(5); setImgLeft(50); setTxtTop(55); setTxtLeft(50);
     setShowSignedBy(false);
+    setFontFamily("Inter, sans-serif");
+    setIsItalic(false);
+    setIsBold(true);
+    setNameColor("#1e3a5f");
+    setPositionColor("#2563eb");
+    setSignedByColor("#64748b");
   };
 
   // ── Stamp preview overlay rendered on canvas for "placed" state ──
@@ -619,17 +674,17 @@ const SignatureSettings = () => {
                         onTouchStart={e => { e.preventDefault(); setDragging("txt"); }}
                       >
                         {showSignedBy && (
-                          <p className="text-slate-400 leading-tight" style={{ fontSize: designerSignedBySize }}>
+                          <p className="leading-tight" style={{ fontSize: designerSignedBySize, color: signedByColor, fontFamily, fontStyle: isItalic ? "italic" : "normal" }}>
                             Digitally Signed by:
                           </p>
                         )}
                         {displayName && getDisplayNameLines(displayName).map((line, i) => (
-                          <p key={i} className="font-bold text-blue-800 leading-tight" style={{ fontSize: designerNameSize }}>
+                          <p key={i} className="leading-tight" style={{ fontSize: designerNameSize, color: nameColor, fontFamily, fontStyle: isItalic ? "italic" : "normal", fontWeight: isBold ? "bold" : "normal" }}>
                             {line}
                           </p>
                         ))}
                         {position && (
-                          <p className="text-blue-600 leading-tight" style={{ fontSize: designerPosSize }}>
+                          <p className="leading-tight" style={{ fontSize: designerPosSize, color: positionColor, fontFamily, fontStyle: isItalic ? "italic" : "normal" }}>
                             {position}
                           </p>
                         )}
@@ -701,6 +756,89 @@ const SignatureSettings = () => {
                       <input type="range" min={10} max={220} step={1} value={stampHeight}
                         onChange={e => handleStampHeightChange(Number(e.target.value))}
                         className="w-full accent-primary" />
+                    </div>
+
+                    {/* Font family */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium text-foreground">Font Family</label>
+                      <div className="relative" ref={fontDropdownRef}>
+                        <button
+                          type="button"
+                          onClick={() => setFontDropdownOpen(v => !v)}
+                          className="w-full flex items-center justify-between rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                        >
+                          <span style={{ fontFamily }}>
+                            {FONT_OPTIONS.find(f => f.value === fontFamily)?.label ?? fontFamily}
+                          </span>
+                          <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground shrink-0 ml-2 transition-transform ${fontDropdownOpen ? "rotate-180" : ""}`} />
+                        </button>
+                        {fontDropdownOpen && (
+                          <div className="absolute z-50 mt-1 w-full rounded-md border border-border bg-background shadow-lg overflow-hidden">
+                            {FONT_OPTIONS.map(opt => (
+                              <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => { setFontFamily(opt.value); setFontDropdownOpen(false); }}
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-accent transition ${fontFamily === opt.value ? "bg-primary/10 text-primary" : "text-foreground"}`}
+                                style={{ fontFamily: opt.value }}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                    {/* Italic + Bold toggles */}
+                    <label className="flex items-center gap-2 cursor-pointer select-none mt-1">
+                      <input type="checkbox" checked={isBold} onChange={e => setIsBold(e.target.checked)}
+                        className="w-4 h-4 rounded accent-primary cursor-pointer" />
+                      <span className="text-xs text-foreground">Bold</span>
+                      {isBold && (
+                        <span className="text-xs text-muted-foreground font-semibold">(name will be bold)</span>
+                      )}
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer select-none mt-1">
+                      <input type="checkbox" checked={isItalic} onChange={e => setIsItalic(e.target.checked)}
+                        className="w-4 h-4 rounded accent-primary cursor-pointer" />
+                      <span className="text-xs text-foreground">Italic</span>
+                      {isItalic && (
+                        <span className="text-xs text-muted-foreground italic">(all text will be italicised)</span>
+                      )}
+                    </label>
+                    </div>
+
+                    {/* Text colors */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium text-foreground">Text Colors</label>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-muted-foreground">Name</label>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-mono text-muted-foreground">{nameColor}</span>
+                            <input type="color" value={nameColor} onChange={e => setNameColor(e.target.value)}
+                              className="w-7 h-7 rounded border border-border cursor-pointer p-0.5 bg-background" />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-muted-foreground">Position</label>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-mono text-muted-foreground">{positionColor}</span>
+                            <input type="color" value={positionColor} onChange={e => setPositionColor(e.target.value)}
+                              className="w-7 h-7 rounded border border-border cursor-pointer p-0.5 bg-background" />
+                          </div>
+                        </div>
+                        {showSignedBy && (
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-xs text-muted-foreground">"Signed by" label</label>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-mono text-muted-foreground">{signedByColor}</span>
+                              <input type="color" value={signedByColor} onChange={e => setSignedByColor(e.target.value)}
+                                className="w-7 h-7 rounded border border-border cursor-pointer p-0.5 bg-background" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                   </div>
@@ -843,17 +981,17 @@ const SignatureSettings = () => {
                                   <div className="absolute text-left pointer-events-none"
                                     style={{ top: `${txtTop}%`, left: `${txtLeft}%`, whiteSpace: "nowrap", lineHeight: 1.2 }}>
                                     {showSignedBy && (
-                                      <p className="text-slate-500" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.667 * drawRect.height) }}>
+                                      <p style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.667 * drawRect.height), color: signedByColor, fontFamily, fontStyle: isItalic ? "italic" : "normal" }}>
                                         Digitally Signed by:
                                       </p>
                                     )}
                                     {getDisplayNameLines(displayName).map((line, i) => (
-                                      <p key={i} className="font-bold text-blue-900" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * drawRect.height) }}>
+                                      <p key={i} className="" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * drawRect.height), color: nameColor, fontFamily, fontStyle: isItalic ? "italic" : "normal", fontWeight: isBold ? "bold" : "normal" }}>
                                         {line}
                                       </p>
                                     ))}
                                     {position && (
-                                      <p className="text-blue-700" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.833 * drawRect.height) }}>
+                                      <p style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.833 * drawRect.height), color: positionColor, fontFamily, fontStyle: isItalic ? "italic" : "normal" }}>
                                         {position}
                                       </p>
                                     )}
@@ -896,17 +1034,17 @@ const SignatureSettings = () => {
                               <div className="absolute text-left"
                                 style={{ top: `${txtTop}%`, left: `${txtLeft}%`, whiteSpace: "nowrap", lineHeight: 1.2 }}>
                                 {showSignedBy && (
-                                  <p className="text-slate-500" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.667 * cssH) }}>
+                                  <p style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.667 * cssH), color: signedByColor, fontFamily, fontStyle: isItalic ? "italic" : "normal" }}>
                                     Digitally Signed by:
                                   </p>
                                 )}
                                 {getDisplayNameLines(displayName).map((line, i) => (
-                                  <p key={i} className="font-bold text-blue-900" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * cssH) }}>
+                                  <p key={i} className="" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * cssH), color: nameColor, fontFamily, fontStyle: isItalic ? "italic" : "normal", fontWeight: isBold ? "bold" : "normal" }}>
                                     {line}
                                   </p>
                                 ))}
                                 {position && (
-                                  <p className="text-blue-700" style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.833 * cssH) }}>
+                                  <p style={{ fontSize: Math.max(0.01, (textSizePct / 100) * 0.833 * cssH), color: positionColor, fontFamily, fontStyle: isItalic ? "italic" : "normal" }}>
                                     {position}
                                   </p>
                                 )}

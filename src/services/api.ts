@@ -38,6 +38,7 @@ export interface UserProfile {
   acc_lvl: number;
   is_active: boolean;
   is_staff: boolean;
+  projects: number[];
 }
 
 /** Slim user shape returned by /users/signatories/ — safe for non-admin users */
@@ -111,6 +112,11 @@ export interface Document {
   requestor: string;
   position: string;
   to: number;
+  to_office_name?: string | null;
+  office?: number | null;
+  office_name?: string | null;
+  projects?: number[];
+  project_names?: string[];
   signedBy: number;
   message: string;
   remarks: string;
@@ -154,6 +160,10 @@ export const authApi = {
     return data;
   },
   isAuthenticated: () => !!localStorage.getItem("auth_token"),
+  forgotPassword: (email: string) =>
+    api.post("users/reset_password/", { email }).then(r => r.data),
+  resetPasswordConfirm: (uid: string, token: string, new_password: string, re_new_password: string) =>
+    api.post("users/reset_password_confirm/", { uid, token, new_password, re_new_password }).then(r => r.data),
 };
 
 // ── Offices ───────────────────────────────────────────────────────────────────

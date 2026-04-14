@@ -1,9 +1,37 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, Send, Eye, Clock, CheckCircle2, Search, Download, RefreshCw, Pencil, Trash2, AlertTriangle, Loader2, ChevronLeft, ChevronRight, ChevronDown, GitBranch, Plus, X as XIcon, Link2, Link2Off, PenLine } from "lucide-react";
+import { FileText, Send, Eye, Clock, CheckCircle2, Search, Download, RefreshCw, Pencil, Trash2, AlertTriangle, Loader2, ChevronLeft, ChevronRight, ChevronDown, GitBranch, Plus, X as XIcon, Link2, Link2Off, PenLine, Printer } from "lucide-react";
+import { PDFDocument } from "pdf-lib";
+import Swal from "sweetalert2";
 import UserLayout from "./UserLayout";
 import { documentApi, officeApi, userApi, Document, Office, SignatoryUser } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
+
+type WritableFileHandle = {
+  createWritable: () => Promise<{
+    write: (data: Blob | BufferSource | string) => Promise<void>;
+    close: () => Promise<void>;
+  }>;
+};
+
+type DirectoryHandle = {
+  name?: string;
+  requestPermission?: (options?: { mode?: "read" | "readwrite" }) => Promise<"granted" | "denied" | "prompt">;
+  getFileHandle: (
+    name: string,
+    options?: { create?: boolean }
+  ) => Promise<WritableFileHandle>;
+};
+
+declare global {
+  interface Window {
+    showDirectoryPicker?: (options?: {
+      id?: string;
+      mode?: "read" | "readwrite";
+      startIn?: "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
+    }) => Promise<DirectoryHandle>;
+  }
+}
 
 const STATUS_COLOR: Record<string, string> = {
   Pending:       "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
@@ -114,6 +142,19 @@ const StatCardSkeleton = () => (
   </div>
 );
 
+const normalizeDateValue = (value?: string | null): string => {
+  if (!value) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 const MyDocuments = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -122,6 +163,12 @@ const MyDocuments = () => {
   const [search, setSearch]           = useState("");
   const [filter, setFilter]           = useState<string>("All");
   const [typeFilter, setTypeFilter]   = useState<string>("All");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
+  const [selectedOffices, setSelectedOffices] = useState<string[]>([]);
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [officeSelection, setOfficeSelection] = useState("");
+  const [projectSelection, setProjectSelection] = useState("");
   const [typeDropOpen, setTypeDropOpen] = useState(false);
   const typeDropRef                    = useRef<HTMLDivElement>(null);
   const [page, setPage]               = useState(1);
@@ -177,6 +224,13 @@ const MyDocuments = () => {
   const [deleteDoc,  setDeleteDoc]  = useState<Document | null>(null);
   const [deleting,   setDeleting]   = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [batchDownloading, setBatchDownloading] = useState(false);
+  const [batchPrinting, setBatchPrinting] = useState(false);
+  const [batchDownloadCompleted, setBatchDownloadCompleted] = useState(0);
+  const [batchDownloadTotal, setBatchDownloadTotal] = useState(0);
+  const [currentDownloadingFile, setCurrentDownloadingFile] = useState<string>("");
+  const [downloadDirectoryHandle, setDownloadDirectoryHandle] = useState<DirectoryHandle | null>(null);
+  const [downloadDirectoryName, setDownloadDirectoryName] = useState<string>("Default browser downloads");
 
   // ── Batch signing state ──
   const [selectedTracks, setSelectedTracks] = useState<string[]>([]);
@@ -184,12 +238,12 @@ const MyDocuments = () => {
     setSelectedTracks(prev => prev.includes(track) ? prev.filter(t => t !== track) : [...prev, track]);
   };
   const toggleSelectAll = () => {
-    const pageTracks = paginated.map(d => d.tracknumber);
-    const allOnPageSelected = pageTracks.every(t => selectedTracks.includes(t));
-    if (allOnPageSelected) {
-      setSelectedTracks(prev => prev.filter(t => !pageTracks.includes(t)));
+    const visibleTracks = visibleDocs.map(d => d.tracknumber);
+    const allVisibleSelected = visibleTracks.every(t => selectedTracks.includes(t));
+    if (allVisibleSelected) {
+      setSelectedTracks(prev => prev.filter(t => !visibleTracks.includes(t)));
     } else {
-      setSelectedTracks(prev => Array.from(new Set([...prev, ...pageTracks])));
+      setSelectedTracks(prev => Array.from(new Set([...prev, ...visibleTracks])));
     }
   };
   const selectAllFiltered = () => {
@@ -206,35 +260,13 @@ const handleDownload = async (doc: Document) => {
   setDownloading(doc.id);
 
   try {
-    const token = localStorage.getItem("auth_token");
-    
     for (let i = 0; i < filesToDownload.length; i++) {
       const f = filesToDownload[i];
       if (!f.file_url) continue;
 
-      const res = await fetch(f.file_url, {
-        headers: token ? { Authorization: `Token ${token}` } : {},
-      });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-
-      // 1. Get the original filename from the URL
-      // This splits by '/' and takes the last part, then removes any ?query params
+      const blob = await fetchFileBlob(f.file_url);
       const originalName = f.file_url.split('/').pop()?.split('?')[0];
-
-      // 2. Set download to the original name (or empty string if parsing fails)
-      a.download = originalName || "";
-
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, originalName || "document.pdf");
 
       // Delay to prevent the browser from blocking multiple simultaneous downloads
       if (i < filesToDownload.length - 1) {
@@ -247,6 +279,299 @@ const handleDownload = async (doc: Document) => {
     setDownloading(null);
   }
 };
+
+  const getDocumentFiles = (doc: Document) => (
+    doc.files && doc.files.length > 0
+      ? doc.files
+      : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : []
+  );
+
+  const fetchFileBytes = async (fileUrl: string) => {
+    const token = localStorage.getItem("auth_token");
+    const res = await fetch(fileUrl, {
+      headers: token ? { Authorization: `Token ${token}` } : {},
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.arrayBuffer();
+  };
+
+  const fetchFileBlob = async (fileUrl: string) => {
+    const bytes = await fetchFileBytes(fileUrl);
+    return new Blob([bytes], { type: "application/pdf" });
+  };
+
+  const getDirectoryPicker = () => {
+    const picker = window.showDirectoryPicker ?? (globalThis as any).showDirectoryPicker;
+    return typeof picker === "function" ? picker : null;
+  };
+
+  const supportsDirectorySave = () => getDirectoryPicker() !== null;
+
+  const sanitizeFilename = (filename: string) => filename.replace(/[\\/:*?"<>|]/g, "_");
+
+  const getDownloadFilename = (doc: Document, fileUrl: string, index: number) => {
+    const originalName = fileUrl.split('/').pop()?.split('?')[0];
+    return sanitizeFilename(originalName || `${doc.tracknumber}-${index + 1}.pdf`);
+  };
+
+  const countDownloadFiles = (selectedDocs: Document[]) => (
+    selectedDocs.reduce((total, doc) => total + getDocumentFiles(doc).filter(file => !!file.file_url).length, 0)
+  );
+
+  const updateBatchDownloadProgress = (filename: string, completed: number, total: number) => {
+    setCurrentDownloadingFile(filename);
+    setBatchDownloadCompleted(completed);
+    setBatchDownloadTotal(total);
+  };
+
+  const pickDownloadDirectory = async () => {
+    const directoryPicker = getDirectoryPicker();
+    if (!directoryPicker) {
+      throw new Error("Directory save is not supported in this browser.");
+    }
+
+    const directoryHandle = await directoryPicker({
+      id: "dtms-download-all",
+      mode: "readwrite",
+      startIn: "downloads",
+    });
+
+    if (directoryHandle.requestPermission) {
+      const permission = await directoryHandle.requestPermission({ mode: "readwrite" });
+      if (permission === "denied") {
+        throw new Error("Directory access was denied.");
+      }
+    }
+
+    setDownloadDirectoryHandle(directoryHandle);
+    setDownloadDirectoryName(directoryHandle.name || "Chosen folder");
+    return directoryHandle;
+  };
+
+  const saveDocumentsToDirectory = async (selectedDocs: Document[]) => {
+    const directoryHandle = downloadDirectoryHandle ?? await pickDownloadDirectory();
+    const totalFiles = countDownloadFiles(selectedDocs);
+    let completedFiles = 0;
+
+    for (const doc of selectedDocs) {
+      const files = getDocumentFiles(doc);
+
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        if (!file.file_url) continue;
+
+        const filename = getDownloadFilename(doc, file.file_url, index);
+        updateBatchDownloadProgress(filename, completedFiles, totalFiles);
+        const fileBytes = await fetchFileBytes(file.file_url);
+        const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(fileBytes);
+        await writable.close();
+        completedFiles += 1;
+        updateBatchDownloadProgress(filename, completedFiles, totalFiles);
+      }
+    }
+  };
+
+  const downloadDocumentsSequentially = async (selectedDocs: Document[]) => {
+    const totalFiles = countDownloadFiles(selectedDocs);
+    let completedFiles = 0;
+
+    for (const doc of selectedDocs) {
+      const files = getDocumentFiles(doc);
+
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        if (!file.file_url) continue;
+
+        const filename = getDownloadFilename(doc, file.file_url, index);
+        updateBatchDownloadProgress(filename, completedFiles, totalFiles);
+        const blob = await fetchFileBlob(file.file_url);
+        downloadBlob(blob, filename);
+        completedFiles += 1;
+        updateBatchDownloadProgress(filename, completedFiles, totalFiles);
+
+        await new Promise(resolve => window.setTimeout(resolve, 900));
+      }
+    }
+  };
+
+  const buildMergedPdf = async (selectedDocs: Document[]) => {
+    const mergedPdf = await PDFDocument.create();
+    let importedPageCount = 0;
+
+    for (const doc of selectedDocs) {
+      const files = getDocumentFiles(doc);
+
+      for (const file of files) {
+        if (!file.file_url) continue;
+
+        const sourceBytes = await fetchFileBytes(file.file_url);
+        const sourcePdf = await PDFDocument.load(sourceBytes, { ignoreEncryption: true });
+        const copiedPages = await mergedPdf.copyPages(sourcePdf, sourcePdf.getPageIndices());
+
+        copiedPages.forEach(page => {
+          mergedPdf.addPage(page);
+          importedPageCount += 1;
+        });
+      }
+    }
+
+    if (importedPageCount === 0) {
+      throw new Error("No PDF pages were available to merge.");
+    }
+
+    const mergedBytes = await mergedPdf.save({ useObjectStreams: false });
+    const mergedBuffer = Uint8Array.from(mergedBytes).buffer;
+    return new Blob([mergedBuffer], { type: "application/pdf" });
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+
+    window.setTimeout(() => {
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }, 1500);
+  };
+
+  const isEdgeBrowser = () => /Edg\//.test(window.navigator.userAgent);
+
+  const printBlob = (blob: Blob) => new Promise<void>((resolve, reject) => {
+    const blobUrl = URL.createObjectURL(blob);
+
+    if (isEdgeBrowser()) {
+      const printWindow = window.open(blobUrl, "_blank", "noopener,noreferrer");
+
+      if (!printWindow) {
+        URL.revokeObjectURL(blobUrl);
+        reject(new Error("Failed to open print preview window."));
+        return;
+      }
+
+      window.setTimeout(() => {
+        try {
+          printWindow.focus();
+          printWindow.print();
+          window.setTimeout(() => {
+            printWindow.close();
+            URL.revokeObjectURL(blobUrl);
+            resolve();
+          }, 1500);
+        } catch (error) {
+          URL.revokeObjectURL(blobUrl);
+          reject(error);
+        }
+      }, 1200);
+
+      return;
+    }
+
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+
+    const cleanup = () => {
+      URL.revokeObjectURL(blobUrl);
+      iframe.remove();
+    };
+
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        window.setTimeout(() => {
+          cleanup();
+          resolve();
+        }, 1000);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    };
+
+    iframe.onerror = () => {
+      cleanup();
+      reject(new Error("Failed to load printable document."));
+    };
+
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+  });
+
+  const getSelectedDocs = () => filtered.filter(doc => selectedTracks.includes(doc.tracknumber));
+
+  const handleDownloadSelected = async () => {
+    const selectedDocs = getSelectedDocs();
+    if (selectedDocs.length === 0) return;
+
+    setBatchDownloading(true);
+    setBatchDownloadCompleted(0);
+    setBatchDownloadTotal(countDownloadFiles(selectedDocs));
+    setCurrentDownloadingFile("");
+    try {
+      if (supportsDirectorySave()) {
+        await saveDocumentsToDirectory(selectedDocs);
+      } else {
+        await downloadDocumentsSequentially(selectedDocs);
+      }
+
+      const totalFiles = countDownloadFiles(selectedDocs);
+      await Swal.fire({
+        icon: "success",
+        title: "Download complete",
+        text: `${totalFiles} file${totalFiles === 1 ? "" : "s"} downloaded successfully.`,
+        confirmButtonText: "OK",
+      });
+    } catch (error) {
+      console.error("Batch download failed", error);
+    } finally {
+      setBatchDownloading(false);
+      setCurrentDownloadingFile("");
+    }
+  };
+
+  const handlePrintSelected = async () => {
+    const selectedDocs = getSelectedDocs();
+    if (selectedDocs.length === 0) return;
+
+    setBatchPrinting(true);
+    try {
+      const mergedBlob = await buildMergedPdf(selectedDocs);
+      await printBlob(mergedBlob);
+    } catch (error) {
+      console.error("Batch print failed", error);
+    } finally {
+      setBatchPrinting(false);
+    }
+  };
+
+  const handleChooseDownloadFolder = async () => {
+    if (!supportsDirectorySave()) {
+      console.error("Directory save is not supported in this browser.");
+      return;
+    }
+
+    try {
+      await pickDownloadDirectory();
+    } catch (error) {
+      console.error("Failed to choose download folder", error);
+    }
+  };
+  const batchDownloadProgressPercent = batchDownloadTotal > 0
+    ? Math.min(100, Math.round((batchDownloadCompleted / batchDownloadTotal) * 100))
+    : 0;
   const handleResend = async () => {
     if (!resendDoc) return;
     setResending(true);
@@ -384,10 +709,48 @@ const handleDownload = async (doc: Document) => {
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => { setPage(1); }, [search, filter, typeFilter]);
+  useEffect(() => { setPage(1); }, [search, filter, typeFilter, dateFromFilter, dateToFilter, selectedOffices, selectedProjects]);
 
   const statuses  = ["All", "For Sending", "For Signing", "Completed", "Signed", "Rejected"];
   const docTypes  = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
+  const officeOptions = Array.from(
+    new Map(
+      docs
+        .filter(d => d.office != null && d.office_name)
+        .map(d => [String(d.office), d.office_name as string])
+    ).entries()
+  ).map(([value, label]) => ({ value, label }));
+  const projectOptions = Array.from(
+    new Map(
+      docs.flatMap(d => {
+        const projectIds = d.projects ?? [];
+        const projectNames = d.project_names ?? [];
+        return projectIds.map((projectId, index) => [String(projectId), projectNames[index] ?? `Project ${projectId}`] as const);
+      })
+    ).entries()
+  ).map(([value, label]) => ({ value, label }));
+  const availableOfficeOptions = officeOptions.filter(option => !selectedOffices.includes(option.value));
+  const availableProjectOptions = projectOptions.filter(option => !selectedProjects.includes(option.value));
+  const activeFilterCount =
+    (typeFilter !== "All" ? 1 : 0) +
+    (dateFromFilter ? 1 : 0) +
+    (dateToFilter ? 1 : 0) +
+    selectedOffices.length +
+    selectedProjects.length;
+
+  const handleOfficeSelect = (value: string) => {
+    setOfficeSelection(value);
+    if (!value) return;
+    setSelectedOffices(prev => prev.includes(value) ? prev : [...prev, value]);
+    setOfficeSelection("");
+  };
+
+  const handleProjectSelect = (value: string) => {
+    setProjectSelection(value);
+    if (!value) return;
+    setSelectedProjects(prev => prev.includes(value) ? prev : [...prev, value]);
+    setProjectSelection("");
+  };
 
   const filtered = docs.filter((d) => {
     const q = search.toLowerCase().trim();
@@ -418,16 +781,31 @@ const handleDownload = async (doc: Document) => {
     }
 
     const matchType = typeFilter === "All" || d.type === typeFilter;
-    return matchSearch && matchFilter && matchType;
+    const documentDate = normalizeDateValue(d.datesubmitted);
+    const matchDateFrom = !dateFromFilter || (documentDate !== "" && documentDate >= dateFromFilter);
+    const matchDateTo = !dateToFilter || (documentDate !== "" && documentDate <= dateToFilter);
+    const matchOffice = selectedOffices.length === 0 || selectedOffices.includes(String(d.office));
+    const matchProject = selectedProjects.length === 0 || (d.projects ?? []).map(String).some(projectId => selectedProjects.includes(projectId));
+    return matchSearch && matchFilter && matchType && matchDateFrom && matchDateTo && matchOffice && matchProject;
   });
+
+  const hasActiveFilters =
+    search.trim() !== "" ||
+    filter !== "All" ||
+    typeFilter !== "All" ||
+    dateFromFilter !== "" ||
+    dateToFilter !== "" ||
+    selectedOffices.length > 0 ||
+    selectedProjects.length > 0;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const visibleDocs = hasActiveFilters ? filtered : paginated;
 
-  const pending    = docs.filter(d => d.status === "Pending").length;
-  const forSigning = docs.filter(d => d.status === "For Signing").length;
-  const completed  = docs.filter(d => d.status === "Completed" && d.userID === user?.id).length;
-  const signedBySelf = docs.filter(d =>
+  const pending    = filtered.filter(d => d.status === "Pending").length;
+  const forSigning = filtered.filter(d => d.status === "For Signing").length;
+  const completed  = filtered.filter(d => d.status === "Completed" && d.userID === user?.id).length;
+  const signedBySelf = filtered.filter(d =>
     d.signatories.some(s => s.user_id === user?.id && s.status === "signed")
   ).length;
 
@@ -525,6 +903,29 @@ const handleDownload = async (doc: Document) => {
               </div>
             )}
           </div>
+          <div className="relative shrink-0 sm:w-full">
+            <div className="flex items-center gap-2 sm:flex-col sm:items-stretch">
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:w-full">
+                <span className="text-xs font-medium text-muted-foreground shrink-0">From</span>
+                <input
+                  type="date"
+                  value={dateFromFilter}
+                  onChange={e => setDateFromFilter(e.target.value)}
+                  className="min-w-[140px] bg-transparent text-sm text-foreground [color-scheme:light] dark:[color-scheme:dark] focus:outline-none sm:min-w-0 sm:w-full"
+                />
+              </div>
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:w-full">
+                <span className="text-xs font-medium text-muted-foreground shrink-0">To</span>
+                <input
+                  type="date"
+                  value={dateToFilter}
+                  min={dateFromFilter || undefined}
+                  onChange={e => setDateToFilter(e.target.value)}
+                  className="min-w-[140px] bg-transparent text-sm text-foreground [color-scheme:light] dark:[color-scheme:dark] focus:outline-none sm:min-w-0 sm:w-full"
+                />
+              </div>
+            </div>
+          </div>
         </div>
         <div className="flex gap-1.5 flex-wrap">
           {statuses.map(s => (
@@ -536,12 +937,129 @@ const handleDownload = async (doc: Document) => {
           ))}
         </div>
 
+        <div className="flex items-center gap-2 flex-wrap">
+          {selectedTracks.length > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5">
+              <span className="text-xs text-muted-foreground">
+                Folder: <span className="font-medium text-foreground">{supportsDirectorySave() ? downloadDirectoryName : "Browser-managed downloads"}</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleChooseDownloadFolder}
+                disabled={!supportsDirectorySave()}
+                className="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-foreground transition hover:bg-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+                title={supportsDirectorySave() ? "Choose download folder" : "Folder selection is not supported in this browser/session"}
+              >
+                Change Folder
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <div className="relative">
+              <select
+                value={officeSelection}
+                onChange={e => handleOfficeSelect(e.target.value)}
+                className="appearance-none rounded-lg border border-border bg-background px-3 py-1.5 pr-8 text-sm text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition min-w-[180px]"
+              >
+                <option value="">Add office filter</option>
+                {availableOfficeOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+            </div>
+            {selectedOffices.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedOffices.map(officeValue => {
+                  const officeLabel = officeOptions.find(option => option.value === officeValue)?.label ?? officeValue;
+                  return (
+                    <span key={officeValue} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      {officeLabel}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOffices(prev => prev.filter(value => value !== officeValue))}
+                        className="rounded-full text-primary/80 transition hover:text-primary"
+                        aria-label={`Remove office ${officeLabel}`}
+                      >
+                        <XIcon className="w-3 h-3" />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <div className="relative">
+              <select
+                value={projectSelection}
+                onChange={e => handleProjectSelect(e.target.value)}
+                className="appearance-none rounded-lg border border-border bg-background px-3 py-1.5 pr-8 text-sm text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition min-w-[180px]"
+              >
+                <option value="">Add project filter</option>
+                {availableProjectOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+            </div>
+            {selectedProjects.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedProjects.map(projectValue => {
+                  const projectLabel = projectOptions.find(option => option.value === projectValue)?.label ?? projectValue;
+                  return (
+                    <span key={projectValue} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      {projectLabel}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProjects(prev => prev.filter(value => value !== projectValue))}
+                        className="rounded-full text-primary/80 transition hover:text-primary"
+                        aria-label={`Remove project ${projectLabel}`}
+                      >
+                        <XIcon className="w-3 h-3" />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {activeFilterCount > 0 && (
+            <button
+              onClick={() => { setTypeFilter("All"); setDateFromFilter(""); setDateToFilter(""); setSelectedOffices([]); setSelectedProjects([]); setOfficeSelection(""); setProjectSelection(""); }}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg px-2.5 py-1.5 hover:bg-accent transition"
+            >
+              <XIcon className="w-3 h-3" /> Clear filters
+              <span className="ml-0.5 bg-primary text-primary-foreground text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            </button>
+          )}
+        </div>
+
         {selectedTracks.length > 0 && (
           <div className="flex flex-col gap-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl animate-in fade-in slide-in-from-top-2">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-blue-700 dark:text-blue-400 ml-2">
                 {selectedTracks.length} document{selectedTracks.length !== 1 ? "s" : ""} selected
               </span>
+              <button
+                onClick={handleDownloadSelected}
+                disabled={batchDownloading}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition shadow-sm disabled:opacity-50"
+              >
+                {batchDownloading
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Downloading...</>
+                  : <><Download className="w-4 h-4" /> Download All</>}
+              </button>
+              <button
+                onClick={handlePrintSelected}
+                disabled={batchPrinting}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 transition shadow-sm disabled:opacity-50"
+              >
+                {batchPrinting
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Printing...</>
+                  : <><Printer className="w-4 h-4" /> Print All</>}
+              </button>
               <button
                 onClick={() => navigate(`/dtms/sign/batch?tracks=${selectedTracks.join(",")}`)}
                 className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition shadow-sm"
@@ -555,6 +1073,28 @@ const handleDownload = async (doc: Document) => {
                 Cancel
               </button>
             </div>
+            {batchDownloading && (
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
+                <div className="flex items-center justify-between gap-3 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span className="truncate">
+                      Downloading {batchDownloadCompleted} of {batchDownloadTotal} file{batchDownloadTotal === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <span className="shrink-0">{batchDownloadProgressPercent}%</span>
+                </div>
+                <div className="mt-1 text-[11px] text-emerald-700/80 dark:text-emerald-400/80 truncate">
+                  {currentDownloadingFile ? `Current file: ${currentDownloadingFile}` : "Preparing files..."}
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-emerald-500/15">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-[width] duration-300 ease-out"
+                    style={{ width: `${batchDownloadProgressPercent}%` }}
+                  />
+                </div>
+              </div>
+            )}
             {selectedTracks.length < filtered.length && (
               <p className="text-[11px] text-blue-600/80 px-2">
                 Selected from current view. <button onClick={selectAllFiltered} className="font-bold underline hover:text-blue-800">Select all {filtered.length} documents</button> instead?
@@ -572,7 +1112,7 @@ const handleDownload = async (doc: Document) => {
             <input
               type="checkbox"
               className="rounded border-border text-primary focus:ring-primary/50 cursor-pointer"
-              checked={paginated.length > 0 && paginated.every(d => selectedTracks.includes(d.tracknumber))}
+                checked={visibleDocs.length > 0 && visibleDocs.every(d => selectedTracks.includes(d.tracknumber))}
               onChange={toggleSelectAll}
             />
           </div>
@@ -593,7 +1133,7 @@ const handleDownload = async (doc: Document) => {
             No documents found.
           </div>
         ) : (
-          paginated.map(doc => (
+          visibleDocs.map(doc => (
             <div
               key={doc.id}
               className="grid grid-cols-[40px_2fr_1fr_1fr_1fr_180px] gap-4 px-5 py-3.5 border-b border-border last:border-0 items-center hover:bg-accent/40 transition-colors slg:grid-cols-[40px_2fr_1fr_180px] sm:grid-cols-[40px_2fr_1fr_80px]"
@@ -713,7 +1253,7 @@ const handleDownload = async (doc: Document) => {
               ? "No documents"
               : `Showing ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, filtered.length)} of ${filtered.length} document${filtered.length !== 1 ? "s" : ""}`}
           </p>
-          {totalPages > 1 && (
+          {!hasActiveFilters && totalPages > 1 && (
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
