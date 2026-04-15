@@ -52,6 +52,7 @@ export interface SignatoryUser {
   acc_lvl: number;
   office_id: number | null;
   office_name: string | null;
+  project_ids: number[];
 }
 
 export interface TemplateRouting {

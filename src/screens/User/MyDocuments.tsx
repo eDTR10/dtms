@@ -23,6 +23,17 @@ type DirectoryHandle = {
   ) => Promise<WritableFileHandle>;
 };
 
+type GoogleTokenResponse = {
+  access_token?: string;
+  error?: string;
+  expires_in?: number;
+  token_type?: string;
+};
+
+type GoogleTokenClient = {
+  requestAccessToken: (options?: { prompt?: string }) => void;
+};
+
 declare global {
   interface Window {
     showDirectoryPicker?: (options?: {
@@ -30,8 +41,32 @@ declare global {
       mode?: "read" | "readwrite";
       startIn?: "desktop" | "documents" | "downloads" | "music" | "pictures" | "videos";
     }) => Promise<DirectoryHandle>;
+    google?: {
+      accounts: {
+        oauth2: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            callback: (response: GoogleTokenResponse) => void;
+            error_callback?: (error: unknown) => void;
+          }) => GoogleTokenClient;
+        };
+      };
+    };
   }
 }
+
+const GOOGLE_DRIVE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID || "").trim();
+const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const GOOGLE_IDENTITY_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
+
+const GoogleDriveIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className={className}>
+    <path d="M9.2 3.2h5.55l5.84 10.14h-5.54L9.2 3.2Z" fill="#0F9D58" />
+    <path d="M7.82 5.6 10.6 10.4 4.95 20.2 2.17 15.4 7.82 5.6Z" fill="#FFC107" />
+    <path d="M13.4 10.4h5.55l2.88 4.98H10.52l2.88-4.98Z" fill="#4285F4" />
+  </svg>
+);
 
 const STATUS_COLOR: Record<string, string> = {
   Pending:       "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
@@ -226,11 +261,18 @@ const MyDocuments = () => {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [batchDownloading, setBatchDownloading] = useState(false);
   const [batchPrinting, setBatchPrinting] = useState(false);
+  const [driveUploading, setDriveUploading] = useState(false);
   const [batchDownloadCompleted, setBatchDownloadCompleted] = useState(0);
   const [batchDownloadTotal, setBatchDownloadTotal] = useState(0);
   const [currentDownloadingFile, setCurrentDownloadingFile] = useState<string>("");
+  const [driveUploadCompleted, setDriveUploadCompleted] = useState(0);
+  const [driveUploadTotal, setDriveUploadTotal] = useState(0);
+  const [currentDriveUploadFile, setCurrentDriveUploadFile] = useState<string>("");
   const [downloadDirectoryHandle, setDownloadDirectoryHandle] = useState<DirectoryHandle | null>(null);
   const [downloadDirectoryName, setDownloadDirectoryName] = useState<string>("Default browser downloads");
+  const googleTokenRef = useRef<string>("");
+  const googleTokenClientRef = useRef<GoogleTokenClient | null>(null);
+  const googleIdentityScriptPromiseRef = useRef<Promise<void> | null>(null);
 
   // ── Batch signing state ──
   const [selectedTracks, setSelectedTracks] = useState<string[]>([]);
@@ -323,6 +365,194 @@ const handleDownload = async (doc: Document) => {
     setCurrentDownloadingFile(filename);
     setBatchDownloadCompleted(completed);
     setBatchDownloadTotal(total);
+  };
+
+  const updateDriveUploadProgress = (filename: string, completed: number, total: number) => {
+    setCurrentDriveUploadFile(filename);
+    setDriveUploadCompleted(completed);
+    setDriveUploadTotal(total);
+  };
+
+  const loadGoogleIdentityScript = () => {
+    if (window.google?.accounts?.oauth2) {
+      return Promise.resolve();
+    }
+
+    if (googleIdentityScriptPromiseRef.current) {
+      return googleIdentityScriptPromiseRef.current;
+    }
+
+    googleIdentityScriptPromiseRef.current = new Promise<void>((resolve, reject) => {
+      const existingScript = document.querySelector(`script[src="${GOOGLE_IDENTITY_SCRIPT_SRC}"]`) as HTMLScriptElement | null;
+      if (existingScript) {
+        existingScript.addEventListener("load", () => resolve(), { once: true });
+        existingScript.addEventListener("error", () => reject(new Error("Failed to load Google Identity Services.")), { once: true });
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = GOOGLE_IDENTITY_SCRIPT_SRC;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Failed to load Google Identity Services."));
+      document.head.appendChild(script);
+    });
+
+    return googleIdentityScriptPromiseRef.current;
+  };
+
+  const getGoogleAccessToken = async () => {
+    if (googleTokenRef.current) {
+      return googleTokenRef.current;
+    }
+
+    if (!GOOGLE_DRIVE_CLIENT_ID) {
+      throw new Error("Missing VITE_GOOGLE_DRIVE_CLIENT_ID in the frontend environment.");
+    }
+
+    await loadGoogleIdentityScript();
+
+    if (!window.google?.accounts?.oauth2) {
+      throw new Error("Google Identity Services is not available.");
+    }
+
+    const googleOauth2 = window.google.accounts.oauth2;
+
+    return new Promise<string>((resolve, reject) => {
+      const tokenClient = googleOauth2.initTokenClient({
+        client_id: GOOGLE_DRIVE_CLIENT_ID,
+        scope: GOOGLE_DRIVE_SCOPE,
+        callback: (response) => {
+          if (response.error || !response.access_token) {
+            if (response.error === "access_denied") {
+              reject(new Error("Google blocked sign-in for this app. Add your Google account as a Test user in the Google Cloud OAuth consent screen, or publish the app."));
+              return;
+            }
+
+            reject(new Error(response.error || "Failed to get Google access token."));
+            return;
+          }
+
+          googleTokenRef.current = response.access_token;
+          resolve(response.access_token);
+        },
+        error_callback: () => reject(new Error("Google sign-in was cancelled.")),
+      });
+
+      googleTokenClientRef.current = tokenClient;
+
+      tokenClient.requestAccessToken({ prompt: "consent" });
+    });
+  };
+
+  const extractDriveFolderId = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+
+    const folderMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    if (folderMatch) return folderMatch[1];
+
+    const idMatch = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (idMatch) return idMatch[1];
+
+    if (/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
+    return "";
+  };
+
+  const promptDriveFolderLink = async () => {
+    const result = await Swal.fire({
+      title: "Send To Drive",
+      html: `
+        <div class="drive-folder-modal__hero">
+          <div class="drive-folder-modal__panel">
+            <div class="drive-folder-modal__badge">Google Drive</div>
+            <p class="drive-folder-modal__copy">Choose the destination folder for the selected PDF files.</p>
+          </div>
+        </div>
+      `,
+      input: "text",
+      inputLabel: "Drive folder link or ID",
+      inputPlaceholder: "Paste a Google Drive folder link or folder ID",
+      showCancelButton: true,
+      confirmButtonText: "Upload Here",
+      cancelButtonText: "Cancel",
+      customClass: {
+        popup: "drive-folder-modal",
+        title: "drive-folder-modal__title",
+        htmlContainer: "drive-folder-modal__body",
+        input: "drive-folder-modal__input",
+        actions: "drive-folder-modal__actions",
+        confirmButton: "drive-folder-modal__confirm",
+        cancelButton: "drive-folder-modal__cancel",
+        validationMessage: "drive-folder-modal__validation",
+      },
+      buttonsStyling: false,
+      width: 560,
+      inputValidator: (value) => {
+        if (!extractDriveFolderId(value || "")) {
+          return "Enter a valid Google Drive folder link or folder ID.";
+        }
+        return undefined;
+      },
+    });
+
+    if (!result.isConfirmed || !result.value) {
+      return null;
+    }
+
+    return {
+      folderId: extractDriveFolderId(result.value),
+      folderLink: result.value,
+    };
+  };
+
+  const uploadFileToDrive = async (accessToken: string, folderId: string, filename: string, fileBytes: ArrayBuffer) => {
+    const metadata = {
+      name: filename,
+      parents: [folderId],
+      mimeType: "application/pdf",
+    };
+
+    const formData = new FormData();
+    formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+    formData.append("file", new Blob([fileBytes], { type: "application/pdf" }), filename);
+
+    const response = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || `Drive upload failed with status ${response.status}.`);
+    }
+
+    return response.json();
+  };
+
+  const sendDocumentsToDrive = async (selectedDocs: Document[], folderId: string, accessToken: string) => {
+    const totalFiles = countDownloadFiles(selectedDocs);
+    let completedFiles = 0;
+
+    for (const doc of selectedDocs) {
+      const files = getDocumentFiles(doc);
+
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        if (!file.file_url) continue;
+
+        const filename = getDownloadFilename(doc, file.file_url, index);
+        updateDriveUploadProgress(filename, completedFiles, totalFiles);
+        const fileBytes = await fetchFileBytes(file.file_url);
+        await uploadFileToDrive(accessToken, folderId, filename, fileBytes);
+        completedFiles += 1;
+        updateDriveUploadProgress(filename, completedFiles, totalFiles);
+      }
+    }
   };
 
   const pickDownloadDirectory = async () => {
@@ -557,6 +787,43 @@ const handleDownload = async (doc: Document) => {
     }
   };
 
+  const handleSendToDrive = async () => {
+    const selectedDocs = getSelectedDocs();
+    if (selectedDocs.length === 0) return;
+
+    setDriveUploading(true);
+    setDriveUploadCompleted(0);
+    setDriveUploadTotal(countDownloadFiles(selectedDocs));
+    setCurrentDriveUploadFile("");
+
+    try {
+      const driveTarget = await promptDriveFolderLink();
+      if (!driveTarget) return;
+
+      const accessToken = await getGoogleAccessToken();
+      await sendDocumentsToDrive(selectedDocs, driveTarget.folderId, accessToken);
+
+      const totalFiles = countDownloadFiles(selectedDocs);
+      await Swal.fire({
+        icon: "success",
+        title: "Drive upload complete",
+        text: `${totalFiles} file${totalFiles === 1 ? "" : "s"} uploaded to Google Drive successfully.`,
+        confirmButtonText: "OK",
+      });
+    } catch (error) {
+      console.error("Drive upload failed", error);
+      await Swal.fire({
+        icon: "error",
+        title: "Drive upload failed",
+        text: error instanceof Error ? error.message : "Failed to upload files to Google Drive.",
+        confirmButtonText: "OK",
+      });
+    } finally {
+      setDriveUploading(false);
+      setCurrentDriveUploadFile("");
+    }
+  };
+
   const handleChooseDownloadFolder = async () => {
     if (!supportsDirectorySave()) {
       console.error("Directory save is not supported in this browser.");
@@ -571,6 +838,9 @@ const handleDownload = async (doc: Document) => {
   };
   const batchDownloadProgressPercent = batchDownloadTotal > 0
     ? Math.min(100, Math.round((batchDownloadCompleted / batchDownloadTotal) * 100))
+    : 0;
+  const driveUploadProgressPercent = driveUploadTotal > 0
+    ? Math.min(100, Math.round((driveUploadCompleted / driveUploadTotal) * 100))
     : 0;
   const handleResend = async () => {
     if (!resendDoc) return;
@@ -1052,6 +1322,15 @@ const handleDownload = async (doc: Document) => {
                   : <><Download className="w-4 h-4" /> Download All</>}
               </button>
               <button
+                onClick={handleSendToDrive}
+                disabled={driveUploading}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 hover:border-slate-300 transition shadow-sm disabled:opacity-50 dark:border-slate-700 dark:bg-white dark:text-slate-800 dark:hover:bg-slate-100"
+              >
+                {driveUploading
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</>
+                  : <> <GoogleDriveIcon className="w-4 h-4" /> Send To Drive</>}
+              </button>
+              <button
                 onClick={handlePrintSelected}
                 disabled={batchPrinting}
                 className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 transition shadow-sm disabled:opacity-50"
@@ -1091,6 +1370,28 @@ const handleDownload = async (doc: Document) => {
                   <div
                     className="h-full rounded-full bg-emerald-500 transition-[width] duration-300 ease-out"
                     style={{ width: `${batchDownloadProgressPercent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {driveUploading && (
+              <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2">
+                <div className="flex items-center justify-between gap-3 text-xs font-medium text-sky-700 dark:text-sky-400">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    <span className="truncate">
+                      Uploading {driveUploadCompleted} of {driveUploadTotal} file{driveUploadTotal === 1 ? "" : "s"} to Google Drive
+                    </span>
+                  </div>
+                  <span className="shrink-0">{driveUploadProgressPercent}%</span>
+                </div>
+                <div className="mt-1 text-[11px] text-sky-700/80 dark:text-sky-400/80 truncate">
+                  {currentDriveUploadFile ? `Current file: ${currentDriveUploadFile}` : "Preparing files for Google Drive..."}
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-sky-500/15">
+                  <div
+                    className="h-full rounded-full bg-sky-500 transition-[width] duration-300 ease-out"
+                    style={{ width: `${driveUploadProgressPercent}%` }}
                   />
                 </div>
               </div>

@@ -12,7 +12,7 @@ import {
   Layers, LayoutGrid, ZoomIn, ZoomOut
 } from "lucide-react";
 import UserLayout from "./UserLayout";
-import { documentApi, signatoryApi, officeApi, userApi, Document, DocumentSignatory, DocumentFile, Office, SignatoryUser } from "../../services/api";
+import { documentApi, signatoryApi, userApi, Document, DocumentSignatory, DocumentFile, SignatoryUser } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
 import DocumentFileList from "../../components/DocumentFileList";
 import SigningOverlay from "@/components/ui/scannerLoader";
@@ -453,9 +453,7 @@ const SignDocument = () => {
   const [routingSignatories, setRoutingSignatories] = useState<Array<{
     user_id: number; user_email: string; user_name: string; order: number; status?: string; role?: "signer" | "viewer";
   }>>([]);
-  const [routingOffices, setRoutingOffices] = useState<Office[]>([]);
   const [routingUsers, setRoutingUsers] = useState<SignatoryUser[]>([]);
-  const [routingOffice, setRoutingOffice] = useState("");
   const [routingSearch, setRoutingSearch] = useState("");
   const [routingPage, setRoutingPage] = useState(0);
   const [routingSaving, setRoutingSaving] = useState(false);
@@ -527,18 +525,18 @@ const SignDocument = () => {
       }))
     );
     setEditingRouting(true);
-    Promise.all([officeApi.list(), userApi.signatories()]).then(([o, u]) => {
-      setRoutingOffices(o); setRoutingUsers(u);
-    });
+    userApi.signatories().then(setRoutingUsers);
   };
 
   const filteredRoutingUsers = routingUsers.filter(u => {
-    if (!routingOffice) return false;
-    if (u.office_id !== Number(routingOffice)) return false;
     if (routingSignatories.some(s => s.user_id === u.id)) return false;
     const q = routingSearch.toLowerCase();
     if (!q) return true;
-    return `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) || u.position.toLowerCase().includes(q);
+    return (
+      `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
+      u.position.toLowerCase().includes(q) ||
+      (u.office_name || "").toLowerCase().includes(q)
+    );
   });
   const totalRoutingPages = Math.ceil(filteredRoutingUsers.length / ROUTING_PAGE_SIZE);
   const pagedRoutingUsers = filteredRoutingUsers.slice(routingPage * ROUTING_PAGE_SIZE, (routingPage + 1) * ROUTING_PAGE_SIZE);
@@ -1533,66 +1531,55 @@ const SignDocument = () => {
 
                       {/* Add signatory picker */}
                       <div className="border border-border rounded-lg p-3 flex flex-col gap-2 bg-background/50">
-                        <p className="text-[11px] text-muted-foreground font-medium">Add signatory from an office</p>
-                        <div className="relative">
-                          <select value={routingOffice} onChange={e => { setRoutingOffice(e.target.value); setRoutingSearch(""); setRoutingPage(0); }}
-                            className="w-full appearance-none rounded-lg border border-border bg-background px-3 py-2 pr-8 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition">
-                            <option value="">— Select office —</option>
-                            {routingOffices.map(o => <option key={o.officeID} value={o.officeID}>{o.name}</option>)}
-                          </select>
-                          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-                        </div>
-                        {routingOffice && (
-                          <>
-                            <input type="text" placeholder="Search by name or position..." value={routingSearch}
-                              onChange={e => { setRoutingSearch(e.target.value); setRoutingPage(0); }}
-                              className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition" />
-                            <div className="border border-border rounded-lg overflow-hidden max-h-48 overflow-y-auto">
-                              {filteredRoutingUsers.length === 0 ? (
-                                <p className="px-3 py-2 text-xs text-muted-foreground">{routingSearch ? "No users match" : "No available users"}</p>
-                              ) : (
-                                <>
-                                  {pagedRoutingUsers.map(u => (
-                                    <div key={u.id} className="flex items-center gap-2 w-full px-3 py-2 border-b border-border last:border-0 text-xs">
-                                      <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold uppercase shrink-0">{u.first_name.slice(0, 1)}</div>
-                                      <div className="min-w-0 flex-1">
-                                        <p className="font-medium text-foreground truncate">{u.first_name} {u.last_name}</p>
-                                        <p className="text-[10px] text-muted-foreground truncate">{u.position || u.email}</p>
-                                      </div>
-                                      <div className="flex gap-1 shrink-0">
-                                        <button type="button" title="Add as Signer"
-                                          onClick={() => {
-                                            const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
-                                            setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder, role: "signer" }]);
-                                          }}
-                                          className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 transition text-[10px] font-semibold">
-                                          <Plus className="w-3 h-3" /> Signer
-                                        </button>
-                                        <button type="button" title="Add as Viewer"
-                                          onClick={() => {
-                                            const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
-                                            setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder, role: "viewer" }]);
-                                          }}
-                                          className="flex items-center gap-1 px-2 py-1 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition text-[10px] font-semibold">
-                                          <Eye className="w-3 h-3" /> Viewer
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ))}
-                                  {totalRoutingPages > 1 && (
-                                    <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-accent/30 text-[10px]">
-                                      <span className="text-muted-foreground">{routingPage * ROUTING_PAGE_SIZE + 1}–{Math.min((routingPage + 1) * ROUTING_PAGE_SIZE, filteredRoutingUsers.length)} of {filteredRoutingUsers.length}</span>
-                                      <div className="flex gap-1">
-                                        <button type="button" onClick={() => setRoutingPage(p => p - 1)} disabled={routingPage === 0} className="px-2 py-0.5 rounded border border-border bg-background hover:bg-accent disabled:opacity-40 transition">‹</button>
-                                        <button type="button" onClick={() => setRoutingPage(p => p + 1)} disabled={routingPage >= totalRoutingPages - 1} className="px-2 py-0.5 rounded border border-border bg-background hover:bg-accent disabled:opacity-40 transition">›</button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </>
+                        <p className="text-[11px] text-muted-foreground font-medium">Search employees by name or position</p>
+                        <input type="text" placeholder="Search by name, position, or office..." value={routingSearch}
+                          onChange={e => { setRoutingSearch(e.target.value); setRoutingPage(0); }}
+                          className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition" />
+                        <div className="border border-border rounded-lg overflow-hidden max-h-48 overflow-y-auto">
+                          {filteredRoutingUsers.length === 0 ? (
+                            <p className="px-3 py-2 text-xs text-muted-foreground">{routingSearch ? "No users match" : "No available users"}</p>
+                          ) : (
+                            <>
+                              {pagedRoutingUsers.map(u => (
+                                <div key={u.id} className="flex items-center gap-2 w-full px-3 py-2 border-b border-border last:border-0 text-xs">
+                                  <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold uppercase shrink-0">{u.first_name.slice(0, 1)}</div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-medium text-foreground truncate">{u.first_name} {u.last_name}</p>
+                                    <p className="text-[10px] text-muted-foreground truncate">{u.position || u.email}</p>
+                                    {u.office_name && <p className="text-[10px] text-muted-foreground/80 truncate">{u.office_name}</p>}
+                                  </div>
+                                  <div className="flex gap-1 shrink-0">
+                                    <button type="button" title="Add as Signer"
+                                      onClick={() => {
+                                        const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
+                                        setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder, role: "signer" }]);
+                                      }}
+                                      className="flex items-center gap-1 px-2 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 transition text-[10px] font-semibold">
+                                      <Plus className="w-3 h-3" /> Signer
+                                    </button>
+                                    <button type="button" title="Add as Viewer"
+                                      onClick={() => {
+                                        const maxOrder = routingSignatories.length === 0 ? 0 : Math.max(...routingSignatories.map(s => s.order)) + 1;
+                                        setRoutingSignatories(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: maxOrder, role: "viewer" }]);
+                                      }}
+                                      className="flex items-center gap-1 px-2 py-1 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition text-[10px] font-semibold">
+                                      <Eye className="w-3 h-3" /> Viewer
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                              {totalRoutingPages > 1 && (
+                                <div className="flex items-center justify-between px-3 py-1.5 border-t border-border bg-accent/30 text-[10px]">
+                                  <span className="text-muted-foreground">{routingPage * ROUTING_PAGE_SIZE + 1}–{Math.min((routingPage + 1) * ROUTING_PAGE_SIZE, filteredRoutingUsers.length)} of {filteredRoutingUsers.length}</span>
+                                  <div className="flex gap-1">
+                                    <button type="button" onClick={() => setRoutingPage(p => p - 1)} disabled={routingPage === 0} className="px-2 py-0.5 rounded border border-border bg-background hover:bg-accent disabled:opacity-40 transition">‹</button>
+                                    <button type="button" onClick={() => setRoutingPage(p => p + 1)} disabled={routingPage >= totalRoutingPages - 1} className="px-2 py-0.5 rounded border border-border bg-background hover:bg-accent disabled:opacity-40 transition">›</button>
+                                  </div>
+                                </div>
                               )}
-                            </div>
-                          </>
-                        )}
+                            </>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex gap-2">

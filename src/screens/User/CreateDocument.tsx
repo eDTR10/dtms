@@ -7,8 +7,8 @@ import {
 import UserLayout from "./UserLayout";
 import SendingOverlay from "@/components/ui/SendingOverlay";
 import {
-  documentApi, templateApi, officeApi, userApi,
-  DocumentTemplate, Office, SignatoryUser,
+  documentApi, templateApi, userApi, officeApi,
+  DocumentTemplate, SignatoryUser, Office,
 } from "../../services/api";
 import { useAuth } from "../Auth/AuthContext";
 
@@ -41,7 +41,6 @@ const CreateDocument = () => {
   const { user } = useAuth();
 
   const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
-  const [offices, setOffices] = useState<Office[]>([]);
   const [allUsers, setAllUsers] = useState<SignatoryUser[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -92,7 +91,10 @@ const CreateDocument = () => {
   // ── Signatory routing state ───────────────────────────────────────────────
   const [signatories, setSignatories] = useState<SignatoryEntry[]>([]);
   const [fromTemplate, setFromTemplate] = useState(false);
-  const [sigOffice, setSigOffice] = useState<string>("");
+  const [sigPickerMode, setSigPickerMode] = useState<"project" | "search">("project");
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [sigProject, setSigProject] = useState<string>("");
+  const [projectSearch, setProjectSearch] = useState<string>("");
   const [sigSearch, setSigSearch] = useState<string>("");
   const [sigPage, setSigPage] = useState(0);
 
@@ -101,12 +103,12 @@ const CreateDocument = () => {
     const ctrl = new AbortController();
     Promise.all([
       templateApi.list(ctrl.signal),
-      officeApi.list(ctrl.signal),
       userApi.signatories(ctrl.signal),
-    ]).then(([t, o, u]) => {
+      officeApi.list(ctrl.signal),
+    ]).then(([t, u, o]) => {
       setTemplates(t);
-      setOffices(o);
       setAllUsers(u);
+      setOffices(o);
     }).catch((err) => {
       if (err?.code !== "ERR_CANCELED") console.error(err);
     });
@@ -232,22 +234,20 @@ const CreateDocument = () => {
     setDraggedSigIdx(null);
   };
 
-  const handleOfficeChange = (val: string) => {
-    setSigOffice(val);
-    setSigSearch("");
-    setSigPage(0);
-  };
-
   // ── Filtered / paginated user list for the picker ────────────────────────
   const filteredSigUsers = allUsers.filter(u => {
-    if (!sigOffice) return false;
-    if (u.office_id !== Number(sigOffice)) return false;
     if (signatories.some(s => s.user_id === u.id)) return false;
+    if (sigPickerMode === "project") {
+      if (!sigProject) return false;
+      const selectedId = Number(sigProject);
+      return u.project_ids.includes(selectedId) || u.office_id === selectedId;
+    }
     const q = sigSearch.toLowerCase();
     if (!q) return true;
     return (
       `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
-      u.position.toLowerCase().includes(q)
+      u.position.toLowerCase().includes(q) ||
+      (u.office_name || "").toLowerCase().includes(q)
     );
   });
   const totalSigPages = Math.ceil(filteredSigUsers.length / PAGE_SIZE);
@@ -623,96 +623,180 @@ const CreateDocument = () => {
                   );
                 })()}
 
-                {/* Add from office picker */}
-                <div className="border border-border rounded-xl p-4 flex flex-col gap-3 bg-background/50">
-                  <p className="text-xs text-muted-foreground font-medium">Add signatory from an office</p>
-
-                  <div className="relative">
-                    <select value={sigOffice} onChange={e => handleOfficeChange(e.target.value)}
-                      className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition">
-                      <option value="">— Select office —</option>
-                      {offices.map(o => (
-                        <option key={o.officeID} value={o.officeID}>{o.name}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                {/* Signatory picker — dual mode */}
+                <div className="border border-border rounded-xl bg-background/50">
+                  {/* Mode tabs */}
+                  <div className="flex border-b border-border rounded-t-xl overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => { setSigPickerMode("project"); setSigPage(0); }}
+                      className={`flex-1 py-2 text-xs font-semibold transition ${
+                        sigPickerMode === "project"
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-accent"
+                      }`}
+                    >
+                      Browse by Office/Project
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setSigPickerMode("search"); setSigPage(0); }}
+                      className={`flex-1 py-2 text-xs font-semibold transition ${
+                        sigPickerMode === "search"
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-accent"
+                      }`}
+                    >
+                      Search by Name
+                    </button>
                   </div>
 
-                  {sigOffice && (
-                    <>
-                      <input type="text" placeholder="Search by name or position..."
+                  <div className="p-4 flex flex-col gap-3">
+                    {/* Filter control */}
+                    {sigPickerMode === "project" ? (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="Search office/project..."
+                          value={projectSearch}
+                          onChange={e => {
+                            setProjectSearch(e.target.value);
+                            setSigProject("");
+                            setSigPage(0);
+                          }}
+                          className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                        />
+
+                        {/* Office/Project list — shown until one is selected */}
+                        {!sigProject && (
+                          <div className="border border-border rounded-lg overflow-hidden">
+                            {(() => {
+                              const filtered = offices.filter(o =>
+                                !projectSearch || o.name.toLowerCase().includes(projectSearch.toLowerCase())
+                              );
+                              return filtered.length === 0 ? (
+                                <p className="px-4 py-3 text-sm text-muted-foreground">No offices/projects match</p>
+                              ) : filtered.map(o => (
+                                <button
+                                  key={o.officeID}
+                                  type="button"
+                                  onClick={() => {
+                                    setSigProject(String(o.officeID));
+                                    setProjectSearch(o.name);
+                                    setSigPage(0);
+                                  }}
+                                  className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-accent text-left border-b border-border last:border-0 transition"
+                                >
+                                  <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold uppercase shrink-0">
+                                    {o.name.slice(0, 1)}
+                                  </div>
+                                  <span className="text-sm text-foreground">{o.name}</span>
+                                </button>
+                              ));
+                            })()}
+                          </div>
+                        )}
+
+                        {/* Clear selection chip */}
+                        {sigProject && (
+                          <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+                            <span className="text-xs font-medium text-primary truncate">{projectSearch}</span>
+                            <button
+                              type="button"
+                              onClick={() => { setSigProject(""); setProjectSearch(""); setSigPage(0); }}
+                              className="ml-2 p-0.5 rounded text-muted-foreground hover:text-destructive transition shrink-0"
+                              title="Clear project"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="Search by name, position, or office..."
                         value={sigSearch}
                         onChange={e => { setSigSearch(e.target.value); setSigPage(0); }}
-                        className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition" />
+                        className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                      />
+                    )}
 
-                      <div className="border border-border rounded-lg overflow-hidden">
-                        {filteredSigUsers.length === 0 ? (
-                          <p className="px-4 py-3 text-sm text-muted-foreground">
-                            {sigSearch
-                              ? "No users match your search"
-                              : "No available users in this office"}
-                          </p>
-                        ) : (
-                          <>
-                            {pagedSigUsers.map(u => (
-                              <button key={u.id} type="button" onClick={() => addSignatory(u)}
-                                className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-accent text-left border-b border-border last:border-0 transition">
-                                <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold uppercase shrink-0">
-                                  {u.first_name.slice(0, 1)}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-sm font-medium text-foreground truncate">
-                                    {u.first_name} {u.last_name}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground truncate">
-                                    {u.position || u.email}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    title="Add as Signer"
-                                    onClick={e => { e.stopPropagation(); addSignatory(u, "signer"); }}
-                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition"
-                                  >
-                                    <Plus className="w-3 h-3" /> Signer
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Add as Viewer"
-                                    onClick={e => { e.stopPropagation(); addSignatory(u, "viewer"); }}
-                                    className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition"
-                                  >
-                                    <Plus className="w-3 h-3" /> Viewer
-                                  </button>
-                                </div>
-                              </button>
-                            ))}
-
-                            {totalSigPages > 1 && (
-                              <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-accent/30">
-                                <span className="text-xs text-muted-foreground">
-                                  {sigPage * PAGE_SIZE + 1}–{Math.min((sigPage + 1) * PAGE_SIZE, filteredSigUsers.length)} of {filteredSigUsers.length}
-                                </span>
-                                <div className="flex gap-1">
-                                  <button type="button" onClick={() => setSigPage(p => p - 1)}
-                                    disabled={sigPage === 0}
-                                    className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">
-                                    ‹ Prev
-                                  </button>
-                                  <button type="button" onClick={() => setSigPage(p => p + 1)}
-                                    disabled={sigPage >= totalSigPages - 1}
-                                    className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">
-                                    Next ›
-                                  </button>
-                                </div>
+                    {/* User list */}
+                    <div className="border border-border rounded-lg overflow-hidden">
+                      {sigPickerMode === "project" && !sigProject ? (
+                        <p className="px-4 py-3 text-sm text-muted-foreground">Select an office/project above to see its members</p>
+                      ) : filteredSigUsers.length === 0 ? (
+                        <p className="px-4 py-3 text-sm text-muted-foreground">
+                          {sigPickerMode === "search" && sigSearch
+                            ? "No users match your search"
+                            : "No available users to assign"}
+                        </p>
+                      ) : (
+                        <>
+                          {pagedSigUsers.map(u => (
+                            <button key={u.id} type="button" onClick={() => addSignatory(u)}
+                              className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-accent text-left border-b border-border last:border-0 transition">
+                              <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold uppercase shrink-0">
+                                {u.first_name.slice(0, 1)}
                               </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </>
-                  )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-foreground truncate">
+                                  {u.first_name} {u.last_name}
+                                </p>
+                                <p className="text-xs text-muted-foreground truncate">
+                                  {u.position || u.email}
+                                </p>
+                                {u.office_name && (
+                                  <p className="text-[11px] text-muted-foreground/80 truncate">
+                                    {u.office_name}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  title="Add as Signer"
+                                  onClick={e => { e.stopPropagation(); addSignatory(u, "signer"); }}
+                                  className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition"
+                                >
+                                  <Plus className="w-3 h-3" /> Signer
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Add as Viewer"
+                                  onClick={e => { e.stopPropagation(); addSignatory(u, "viewer"); }}
+                                  className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition"
+                                >
+                                  <Plus className="w-3 h-3" /> Viewer
+                                </button>
+                              </div>
+                            </button>
+                          ))}
+
+                          {totalSigPages > 1 && (
+                            <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-accent/30">
+                              <span className="text-xs text-muted-foreground">
+                                {sigPage * PAGE_SIZE + 1}–{Math.min((sigPage + 1) * PAGE_SIZE, filteredSigUsers.length)} of {filteredSigUsers.length}
+                              </span>
+                              <div className="flex gap-1">
+                                <button type="button" onClick={() => setSigPage(p => p - 1)}
+                                  disabled={sigPage === 0}
+                                  className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">
+                                  ‹ Prev
+                                </button>
+                                <button type="button" onClick={() => setSigPage(p => p + 1)}
+                                  disabled={sigPage >= totalSigPages - 1}
+                                  className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">
+                                  Next ›
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
 
