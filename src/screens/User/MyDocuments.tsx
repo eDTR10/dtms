@@ -286,6 +286,26 @@ const MyDocuments = () => {
   const [downloadDirectoryHandle, setDownloadDirectoryHandle] = useState<DirectoryHandle | null>(null);
   const [downloadDirectoryName, setDownloadDirectoryName] = useState<string>("Default browser downloads");
   const googleTokenRef = useRef<string>("");
+  const GDRIVE_TOKEN_KEY = "gdrive_access_token";
+  const GDRIVE_TOKEN_EXPIRY_KEY = "gdrive_token_expiry";
+
+  const getCachedGoogleToken = (): string | null => {
+    try {
+      const token = sessionStorage.getItem(GDRIVE_TOKEN_KEY);
+      const expiry = sessionStorage.getItem(GDRIVE_TOKEN_EXPIRY_KEY);
+      if (token && expiry && Date.now() < Number(expiry)) return token;
+    } catch { /* sessionStorage unavailable */ }
+    return null;
+  };
+
+  const cacheGoogleToken = (token: string, expiresIn: number) => {
+    try {
+      // Store with a 60-second safety margin
+      sessionStorage.setItem(GDRIVE_TOKEN_KEY, token);
+      sessionStorage.setItem(GDRIVE_TOKEN_EXPIRY_KEY, String(Date.now() + (expiresIn - 60) * 1000));
+    } catch { /* sessionStorage unavailable */ }
+    googleTokenRef.current = token;
+  };
   const googleTokenClientRef = useRef<GoogleTokenClient | null>(null);
   const googleIdentityScriptPromiseRef = useRef<Promise<void> | null>(null);
 
@@ -418,8 +438,14 @@ const handleDownload = async (doc: Document) => {
   };
 
   const getGoogleAccessToken = async () => {
-    if (googleTokenRef.current) {
-      return googleTokenRef.current;
+    // Return in-memory token if still valid
+    if (googleTokenRef.current) return googleTokenRef.current;
+
+    // Return sessionStorage-cached token if not yet expired
+    const cached = getCachedGoogleToken();
+    if (cached) {
+      googleTokenRef.current = cached;
+      return cached;
     }
 
     if (!GOOGLE_DRIVE_CLIENT_ID) {
@@ -444,12 +470,10 @@ const handleDownload = async (doc: Document) => {
               reject(new Error("Google blocked sign-in for this app. Add your Google account as a Test user in the Google Cloud OAuth consent screen, or publish the app."));
               return;
             }
-
             reject(new Error(response.error || "Failed to get Google access token."));
             return;
           }
-
-          googleTokenRef.current = response.access_token;
+          cacheGoogleToken(response.access_token, response.expires_in ?? 3600);
           resolve(response.access_token);
         },
         error_callback: () => reject(new Error("Google sign-in was cancelled.")),
@@ -457,7 +481,8 @@ const handleDownload = async (doc: Document) => {
 
       googleTokenClientRef.current = tokenClient;
 
-      tokenClient.requestAccessToken({ prompt: "consent" });
+      // Omit prompt:"consent" so Google reuses the existing session silently when possible
+      tokenClient.requestAccessToken({});
     });
   };
 
