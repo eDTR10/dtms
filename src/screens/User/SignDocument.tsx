@@ -17,6 +17,12 @@ import { useAuth } from "../Auth/AuthContext";
 import DocumentFileList from "../../components/DocumentFileList";
 import SigningOverlay from "@/components/ui/scannerLoader";
 import { buildStampBlob } from "./stampUtils";
+import {
+  SignatureProfile,
+  ensureSignatureProfiles,
+  setActiveSignatureProfileId,
+  syncLegacyStorageFromProfile,
+} from "./signatureProfiles";
 
 /** Safely parse a datetime string from the API as UTC. */
 const parseUTC = (str: string): Date =>
@@ -44,6 +50,26 @@ const PNPKI_URL = (import.meta.env.VITE_PNPKI_SERVER as string || "").replace(/\
 const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string || "").replace(/\/$/, "");
 
 const ROUTING_PAGE_SIZE = 6;
+
+type StampStyleSnapshot = {
+  signatureProfileId: string;
+  displayName: string;
+  sigPos: string;
+  showSignedBy: boolean;
+  signImagePreview: string;
+  imgTop: number;
+  imgLeft: number;
+  imgWidthPct: number;
+  txtTop: number;
+  txtLeft: number;
+  textSizePct: number;
+  fontFamily: string;
+  isItalic: boolean;
+  isBold: boolean;
+  nameColor: string;
+  positionColor: string;
+  signedByColor: string;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STAMP PREVIEW COMPONENT
@@ -194,12 +220,15 @@ const SignDocument = () => {
   const [signedBlobs, setSignedBlobs] = useState<Array<{ blob: Blob; name: string }>>([]);
   const [selectedFileUrl, setSelectedFileUrl] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
+  const [signatureProfiles, setSignatureProfiles] = useState<SignatureProfile[]>([]);
+  const [selectedSignatureId, setSelectedSignatureId] = useState("");
 
   // ── Per-file stamp tracking ───────────────────────────────────────────────
   type FileStampConfig = {
     sigX: number; sigY: number; sigPage: number;
     sigBoxW: number; sigBoxH: number;
     placed: boolean; pdfW: number; pdfH: number;
+    style: StampStyleSnapshot;
   };
 
   const fileStampRef = useRef<Record<number, FileStampConfig>>({})
@@ -233,6 +262,9 @@ const SignDocument = () => {
   const outerContainerRef = useRef<HTMLDivElement>(null); // measures available width (zoom-independent)
   const viewerContainerRef = useRef<HTMLDivElement>(null); // matches canvas size for overlay positioning
   const renderTaskRef = useRef<any>(null);
+  const pdfLoadSeqRef = useRef(0);
+  const pdfBlobUrlRef = useRef<string | null>(null);
+  const activeFileIdRef = useRef<number | null>(null);
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -243,6 +275,7 @@ const SignDocument = () => {
 
   // ── Zoom ────────────────────────────────────────────────────────────────────
   const zoomLevelRef = useRef(1.0);
+  const sigPageRef = useRef(1);
   const [zoomLevel, setZoomLevel] = useState(1.0);
 
   const renderPage = useCallback(async (doc: any, pageNum: number, zoom?: number) => {
@@ -277,13 +310,21 @@ const SignDocument = () => {
     setPdfPageHeight(vp1.height);
   }, []);
 
-  const loadPdf = useCallback(async (fileUrl: string, opts?: { force?: boolean }) => {
+  const loadPdf = useCallback(async (fileUrl: string, opts?: { force?: boolean; fileId?: number | null; page?: number }) => {
+    const loadSeq = ++pdfLoadSeqRef.current;
     const force = !!opts?.force;
-    if (pdfBlobUrl && !force) return;
+    const targetFileId = typeof opts?.fileId === "number" ? opts.fileId : null;
+    const requestedPage = typeof opts?.page === "number" ? opts.page : sigPageRef.current;
+    if (pdfBlobUrlRef.current && !force) return;
     setPdfLoading(true);
     setPdfError(null);
+    setPdfDoc(null);
     try {
-      if (force && pdfBlobUrl) { URL.revokeObjectURL(pdfBlobUrl); setPdfBlobUrl(null); }
+      if (force && pdfBlobUrlRef.current) {
+        URL.revokeObjectURL(pdfBlobUrlRef.current);
+        pdfBlobUrlRef.current = null;
+        setPdfBlobUrl(null);
+      }
       const token = localStorage.getItem("auth_token");
       const requestUrl = force
         ? `${fileUrl}${fileUrl.includes("?") ? "&" : "?"}_ts=${Date.now()}`
@@ -294,23 +335,50 @@ const SignDocument = () => {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const arrayBuffer = await res.arrayBuffer();
+      if (loadSeq !== pdfLoadSeqRef.current) return;
+      if (targetFileId !== null && activeFileIdRef.current !== targetFileId) return;
+
       const blob = new Blob([arrayBuffer], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
+
+      if (loadSeq !== pdfLoadSeqRef.current || (targetFileId !== null && activeFileIdRef.current !== targetFileId)) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+
+      if (pdfBlobUrlRef.current) URL.revokeObjectURL(pdfBlobUrlRef.current);
+      pdfBlobUrlRef.current = url;
       setPdfBlobUrl(url);
+
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-      const doc = await loadingTask.promise;
-      setPdfDoc(doc);
-      await renderPage(doc, 1);
+      const nextDoc = await loadingTask.promise;
+      if (loadSeq !== pdfLoadSeqRef.current || (targetFileId !== null && activeFileIdRef.current !== targetFileId)) {
+        try { await nextDoc.destroy(); } catch (_) { }
+        return;
+      }
+
+      const safePage = Math.max(1, Math.min(requestedPage, nextDoc.numPages));
+      setPdfDoc(nextDoc);
+      if (safePage !== sigPageRef.current) setSigPage(safePage);
+      await renderPage(nextDoc, safePage);
     } catch (e: any) {
-      setPdfError(e?.message || "Failed to load PDF.");
+      if (loadSeq === pdfLoadSeqRef.current) {
+        setPdfError(e?.message || "Failed to load PDF.");
+      }
     } finally {
-      setPdfLoading(false);
+      if (loadSeq === pdfLoadSeqRef.current) setPdfLoading(false);
     }
-  }, [pdfBlobUrl, renderPage]);
+  }, [renderPage]);
 
   useEffect(() => {
-    return () => { if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl); };
-  }, [pdfBlobUrl]);
+    return () => {
+      pdfLoadSeqRef.current += 1;
+      if (pdfBlobUrlRef.current) {
+        URL.revokeObjectURL(pdfBlobUrlRef.current);
+        pdfBlobUrlRef.current = null;
+      }
+    };
+  }, []);
 
   // ── Credentials ───────────────────────────────────────────────────────────
   const [p12File, setP12File] = useState<File | null>(null);
@@ -318,7 +386,7 @@ const SignDocument = () => {
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [sigPos, setSigPos] = useState("");
-  const [signImage, setSignImage] = useState<File | null>(null);
+  const [_signImage, setSignImage] = useState<File | null>(null);
   const [signImagePreview, setSignImagePreview] = useState("");
   const [showSignedBy, setShowSignedBy] = useState(false);
 
@@ -346,6 +414,140 @@ const SignDocument = () => {
   const [sigPage, setSigPage] = useState(1);
   const [batchSignPage, setBatchSignPage] = useState(false);
   const [batchSignFile, setBatchSignFile] = useState(false);
+
+  const captureStampStyle = useCallback((): StampStyleSnapshot => ({
+    signatureProfileId: selectedSignatureId,
+    displayName,
+    sigPos,
+    showSignedBy,
+    signImagePreview,
+    imgTop,
+    imgLeft,
+    imgWidthPct,
+    txtTop,
+    txtLeft,
+    textSizePct,
+    fontFamily,
+    isItalic,
+    isBold,
+    nameColor,
+    positionColor,
+    signedByColor,
+  }), [
+    selectedSignatureId,
+    displayName,
+    sigPos,
+    showSignedBy,
+    signImagePreview,
+    imgTop,
+    imgLeft,
+    imgWidthPct,
+    txtTop,
+    txtLeft,
+    textSizePct,
+    fontFamily,
+    isItalic,
+    isBold,
+    nameColor,
+    positionColor,
+    signedByColor,
+  ]);
+
+  const applyStampStyle = useCallback((style: StampStyleSnapshot) => {
+    setSelectedSignatureId(style.signatureProfileId || "");
+    setDisplayName(style.displayName || "");
+    setSigPos(style.sigPos || "");
+    setShowSignedBy(!!style.showSignedBy);
+    setImgTop(style.imgTop || 5);
+    setImgLeft(style.imgLeft || 50);
+    setImgWidthPct(style.imgWidthPct || 35);
+    setTxtTop(style.txtTop || 55);
+    setTxtLeft(style.txtLeft || 50);
+    setTextSizePct(style.textSizePct || 18);
+    _setFontFamily(style.fontFamily || "Inter, sans-serif");
+    _setIsItalic(!!style.isItalic);
+    _setIsBold(style.isBold !== false);
+    _setNameColor(style.nameColor || "#1e3a5f");
+    _setPositionColor(style.positionColor || "#2563eb");
+    _setSignedByColor(style.signedByColor || "#64748b");
+
+    if (style.signImagePreview) {
+      setSignImagePreview(style.signImagePreview);
+      try {
+        const [hdr, b64] = style.signImagePreview.split(",");
+        const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
+        setSignImage(base64ToFile(b64, "signature.png", mime));
+      } catch {
+        setSignImage(null);
+      }
+    } else {
+      setSignImagePreview("");
+      setSignImage(null);
+    }
+  }, []);
+
+  const applySignatureProfile = useCallback((profile: SignatureProfile) => {
+    setPassword(profile.password || "");
+    setDisplayName(profile.displayName || `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim());
+    setSigPos(profile.position || user?.position || "");
+    setSigBoxW(profile.stampWidth || 220);
+    setSigBoxH(profile.stampHeight || 80);
+    setShowSignedBy(!!profile.showSignedBy);
+    setImgTop(profile.imgTop || 5);
+    setImgLeft(profile.imgLeft || 50);
+    setImgWidthPct(profile.imgWidthPct || 35);
+    setTxtTop(profile.txtTop || 55);
+    setTxtLeft(profile.txtLeft || 50);
+    setTextSizePct(profile.textSizePct || 18);
+    _setFontFamily(profile.fontFamily || "Inter, sans-serif");
+    _setIsItalic(!!profile.isItalic);
+    _setIsBold(profile.isBold !== false);
+    _setNameColor(profile.nameColor || "#1e3a5f");
+    _setPositionColor(profile.positionColor || "#2563eb");
+    _setSignedByColor(profile.signedByColor || "#64748b");
+
+    if (profile.p12Data) {
+      try {
+        const filename = profile.p12Name || "certificate.p12";
+        setP12File(base64ToFile(profile.p12Data, filename, "application/x-pkcs12"));
+        setP12FileName(filename);
+      } catch {
+        setP12File(null);
+        setP12FileName("");
+      }
+    } else {
+      setP12File(null);
+      setP12FileName("");
+    }
+
+    if (profile.signImageData) {
+      setSignImagePreview(profile.signImageData);
+      try {
+        const [hdr, b64] = profile.signImageData.split(",");
+        const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
+        setSignImage(base64ToFile(b64, "signature.png", mime));
+      } catch {
+        setSignImage(null);
+      }
+    } else {
+      setSignImagePreview("");
+      setSignImage(null);
+    }
+
+    syncLegacyStorageFromProfile(profile);
+  }, [user?.first_name, user?.last_name, user?.position]);
+
+  const handleSignatureProfileSelect = (profileId: string) => {
+    setSelectedSignatureId(profileId);
+    setActiveSignatureProfileId(profileId);
+    const profile = signatureProfiles.find(p => p.id === profileId);
+    if (!profile) return;
+    applySignatureProfile(profile);
+  };
+
+  useEffect(() => {
+    sigPageRef.current = sigPage;
+  }, [sigPage]);
 
   useEffect(() => {
     if (pdfDoc) renderPage(pdfDoc, sigPage);
@@ -437,6 +639,7 @@ const SignDocument = () => {
   const isOwner = doc?.userID === user?.id;
   const isViewer = mySig?.role === "viewer";
   const canSign = !!doc && !isViewer && (isOwner || mySig?.status === "pending" || mySig?.status === "signed");
+  const canPlaceSignature = canSign && !!pdfDoc && !pdfLoading && !!selectedFileUrl;
 
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
@@ -570,37 +773,15 @@ const SignDocument = () => {
     }
   };
 
-  // Load credentials from localStorage
+  // Load selected signature profile
   useEffect(() => {
-    setPassword(localStorage.getItem("sig_password") || "");
-    setDisplayName(localStorage.getItem("sig_displayName") || `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim());
-    setSigPos(localStorage.getItem("sig_position") || user?.position || "");
-    setSigBoxW(Number(localStorage.getItem("sig_stamp_width")) || 220);
-    setSigBoxH(Number(localStorage.getItem("sig_stamp_height")) || 80);
-    setShowSignedBy(localStorage.getItem("sig_show_signed_by") === "true");
-    setImgTop(Number(localStorage.getItem("sig_img_top"))          || 5);
-    setImgLeft(Number(localStorage.getItem("sig_img_left"))         || 50);
-    setImgWidthPct(Number(localStorage.getItem("sig_image_width_pct")) || 35);
-    setTxtTop(Number(localStorage.getItem("sig_txt_top"))          || 55);
-    setTxtLeft(Number(localStorage.getItem("sig_txt_left"))         || 50);
-    setTextSizePct(Number(localStorage.getItem("sig_text_size_pct"))   || 18);
-
-    const p12b64 = localStorage.getItem("sig_p12_data");
-    const p12name = localStorage.getItem("sig_p12_name") || "certificate.p12";
-    if (p12b64) {
-      try { setP12File(base64ToFile(p12b64, p12name, "application/x-pkcs12")); setP12FileName(p12name); } catch { }
-    }
-
-    const imgData = localStorage.getItem("sig_image_data");
-    if (imgData) {
-      setSignImagePreview(imgData);
-      try {
-        const [hdr, b64] = imgData.split(",");
-        const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
-        setSignImage(base64ToFile(b64, "signature.png", mime));
-      } catch { }
-    }
-  }, [user?.first_name, user?.last_name, user?.position]);
+    const { profiles, activeId } = ensureSignatureProfiles();
+    setSignatureProfiles(profiles);
+    const selected = profiles.find(p => p.id === activeId) || profiles[0];
+    if (!selected) return;
+    setSelectedSignatureId(selected.id);
+    applySignatureProfile(selected);
+  }, [applySignatureProfile]);
 
   useEffect(() => {
     if (!primaryTrack) return;
@@ -611,8 +792,14 @@ const SignDocument = () => {
         const firstFile = d.files && d.files.length > 0 ? d.files[0] : null;
         const fileToLoad = firstFile?.file_url || d.file_url || null;
         setSelectedFileUrl(fileToLoad);
-        if (firstFile) setActiveDocFile(firstFile);
-        if (fileToLoad && pdfVisible) loadPdf(fileToLoad);
+        if (firstFile) {
+          activeFileIdRef.current = firstFile.id;
+          setActiveDocFile(firstFile);
+        } else {
+          activeFileIdRef.current = null;
+          setActiveDocFile(null);
+        }
+        if (fileToLoad && pdfVisible) loadPdf(fileToLoad, { force: true, fileId: firstFile?.id ?? null, page: 1 });
       })
       .catch((err) => {
         if (err?.code === "ERR_CANCELED") return;
@@ -648,6 +835,7 @@ const SignDocument = () => {
         const cfg: FileStampConfig = {
           sigX: newX, sigY: newY, sigPage, sigBoxW, sigBoxH,
           placed: true, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+          style: captureStampStyle(),
         };
         fileStampRef.current[activeDocFile.id] = cfg;
         setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
@@ -662,6 +850,7 @@ const SignDocument = () => {
       const cfg: FileStampConfig = {
         sigX, sigY, sigPage, sigBoxW, sigBoxH,
         placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+        style: captureStampStyle(),
       };
       fileStampRef.current[activeDocFile.id] = cfg;
       setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
@@ -670,6 +859,7 @@ const SignDocument = () => {
     if (saved) {
       setSigX(saved.sigX); setSigY(saved.sigY); setSigPage(saved.sigPage);
       setSigBoxW(saved.sigBoxW); setSigBoxH(saved.sigBoxH); setStampPlaced(saved.placed);
+      applyStampStyle(saved.style);
     } else {
       setSigX(170); setSigY(720); setSigPage(1); setStampPlaced(false);
       // No saved config — restore to regular stamp dims
@@ -677,40 +867,47 @@ const SignDocument = () => {
       setSigBoxH(Number(localStorage.getItem("sig_stamp_height")) || 80);
     }
     setPlacingMode(false); setHoverPx(null);
+    activeFileIdRef.current = newFile.id;
     setActiveDocFile(newFile);
     setSelectedFileUrl(newFile.file_url);
     setPdfVisible(true);
-    loadPdf(newFile.file_url, { force: true });
+    loadPdf(newFile.file_url, { force: true, fileId: newFile.id, page: saved?.sigPage || 1 });
   };
 
 
 
 
   // ── Build composite stamp blob for backend using shared stampUtils ─────────
-  const buildStampCanvas = (): Promise<Blob | null> => {
+  const buildStampCanvas = (style?: StampStyleSnapshot, dims?: { width: number; height: number }): Promise<Blob | null> => {
     // For tiny stamps (counter-sign), increase renderScale so the canvas is
     // drawn at full quality (~320px tall).  The AP matrix from pyhanko will
     // uniformly scale it down to the actual field size — aspect ratio is
     // always preserved because cW was computed from cH * (stampW/stampH).
     const normalStampH = Number(localStorage.getItem("sig_stamp_height")) || 80;
-    const qualityScale = Math.max(8, Math.ceil((normalStampH * 8) / sigBoxH));
+    const targetW = dims?.width ?? sigBoxW;
+    const targetH = dims?.height ?? sigBoxH;
+    const styleToUse = style || captureStampStyle();
+    const qualityScale = Math.max(8, Math.ceil((normalStampH * 8) / targetH));
     return buildStampBlob({
-      signImagePreview: signImagePreview || null,
-      imgTop, imgLeft, imgWidthPct,
-      txtTop, txtLeft,
-      showSignedBy,
-      displayName: displayName || `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim(),
-      position: sigPos,
-      textSizePct: textSizePct / 100,
-      stampWidthPt:  sigBoxW,
-      stampHeightPt: sigBoxH,
+      signImagePreview: styleToUse.signImagePreview || null,
+      imgTop: styleToUse.imgTop,
+      imgLeft: styleToUse.imgLeft,
+      imgWidthPct: styleToUse.imgWidthPct,
+      txtTop: styleToUse.txtTop,
+      txtLeft: styleToUse.txtLeft,
+      showSignedBy: styleToUse.showSignedBy,
+      displayName: styleToUse.displayName || `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim(),
+      position: styleToUse.sigPos,
+      textSizePct: styleToUse.textSizePct / 100,
+      stampWidthPt:  targetW,
+      stampHeightPt: targetH,
       renderScale: qualityScale,
-      fontFamily,
-      isItalic,
-      isBold,
-      nameColor,
-      positionColor,
-      signedByColor,
+      fontFamily: styleToUse.fontFamily,
+      isItalic: styleToUse.isItalic,
+      isBold: styleToUse.isBold,
+      nameColor: styleToUse.nameColor,
+      positionColor: styleToUse.positionColor,
+      signedByColor: styleToUse.signedByColor,
     });
   };
 
@@ -725,6 +922,7 @@ const SignDocument = () => {
       const cfg: FileStampConfig = {
         sigX, sigY, sigPage, sigBoxW, sigBoxH,
         placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+        style: captureStampStyle(),
       };
       fileStampRef.current[activeDocFile.id] = cfg;
       setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
@@ -744,7 +942,6 @@ const SignDocument = () => {
     setSigning(true); setError(null);
     const collected: Array<{ blob: Blob; name: string }> = [];
     try {
-      const compositeBlob = await buildStampCanvas();
       const tok = localStorage.getItem("auth_token");
       const tracksToProcess = isBatchMode ? tracksArray : [doc.tracknumber];
 
@@ -776,6 +973,8 @@ const SignDocument = () => {
           const xRatio = cfg.sigX / cfg.pdfW;
           const wRatio = cfg.sigBoxW / cfg.pdfW;
           const hRatio = cfg.sigBoxH / cfg.pdfH;
+          const styleForFile = cfg.style || captureStampStyle();
+          const compositeBlob = await buildStampCanvas(styleForFile, { width: cfg.sigBoxW, height: cfg.sigBoxH });
           // Server expects y_ratio from the TOP of the page (top-origin).
           // cfg.sigY is bottom-origin (PDF convention), so convert:
           //   top_of_box_from_top = pdfH - sigY - sigBoxH
@@ -788,8 +987,8 @@ const SignDocument = () => {
           // Always send signer_name / sign_note — the PNPKI server uses them
           // for PDF certificate metadata (not the visual stamp).  Visual stamp
           // appearance is controlled entirely by the sign_design PNG.
-          fd.append("signer_name", displayName || `${user?.first_name} ${user?.last_name}`);
-          fd.append("sign_note",   sigPos || user?.position || "");
+          fd.append("signer_name", styleForFile.displayName || `${user?.first_name} ${user?.last_name}`);
+          fd.append("sign_note",   styleForFile.sigPos || user?.position || "");
           fd.append("page", String(cfg.sigPage));
           fd.append("sign_all_pages", batchSignPage ? "true" : "false");
           fd.append("x_ratio", String(xRatio));
@@ -797,7 +996,15 @@ const SignDocument = () => {
           fd.append("w_ratio", String(wRatio));
           fd.append("h_ratio", String(hRatio));
           if (compositeBlob) fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
-          if (signImage) fd.append("sign_image", signImage, "signature.png");
+          if (styleForFile.signImagePreview) {
+            try {
+              const [hdr, b64] = styleForFile.signImagePreview.split(",");
+              const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
+              fd.append("sign_image", base64ToFile(b64, "signature.png", mime), "signature.png");
+            } catch {
+              // Ignore malformed preview payload and continue signing.
+            }
+          }
 
           const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
           if (!signRes.ok) throw new Error(`PNPKI server error on file ${i + 1} of ${trackNum}.`);
@@ -833,6 +1040,7 @@ const SignDocument = () => {
         if (activeDocFile && updatedPrimaryDoc.files) {
           const freshFile = updatedPrimaryDoc.files.find((f: DocumentFile) => f.id === activeDocFile.id);
           if (freshFile) {
+            activeFileIdRef.current = freshFile.id;
             setActiveDocFile(freshFile);
             setSelectedFileUrl(freshFile.file_url);
           }
@@ -1006,6 +1214,7 @@ const SignDocument = () => {
   );
 
   const fallbackName = `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim();
+  const selectedSignatureProfileName = signatureProfiles.find(p => p.id === selectedSignatureId)?.name || "";
 
   return (
     <UserLayout title="Sign Document" subtitle={isBatchMode ? `Batch Signing ${tracksArray.length} Documents` : doc ? `${doc.tracknumber} — ${doc.title}` : "Loading..."}>
@@ -1058,7 +1267,7 @@ const SignDocument = () => {
                 <button onClick={() => {
                   setDone(false); setPdfVisible(true); setPlacingMode(true); setHoverPx(null);
                   const urlToLoad = activeDocFile?.file_url || doc?.file_url;
-                  if (urlToLoad) void loadPdf(urlToLoad, { force: true });
+                  if (urlToLoad) void loadPdf(urlToLoad, { force: true, fileId: activeDocFile?.id ?? null, page: sigPage });
                 }}
                   className="px-5 py-2.5 rounded-lg border border-border text-sm text-foreground hover:bg-accent transition">
                   Add Another Signature
@@ -1104,7 +1313,7 @@ const SignDocument = () => {
                   )}
 
                   {/* Header bar */}
-                  <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-muted/30">
+                  <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border bg-muted/30 flex-wrap">
                     <Eye className="w-4 h-4 text-primary sm:hidden" />
                     <span className="text-sm font-semibold text-foreground sm:hidden">View Document</span>
                     {pdfLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground ml-1" />}
@@ -1136,22 +1345,44 @@ const SignDocument = () => {
                       </div>
                     )}
 
-                    <div className="ml-auto flex items-center gap-2">
-                      {canSign && pdfBlobUrl && !placingMode && (
-                        <button onClick={() => { setPdfVisible(true); setPlacingMode(true); setHoverPx(null); }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition">
-                          <MousePointer2 className="w-3.5 h-3.5" /> <span className="sm:hidden">Place Signature</span>
+                    <div className="ml-auto flex items-center gap-2 flex-wrap justify-end w-auto sm:w-full sm:grid sm:grid-cols-8 sm:gap-2 sm:items-stretch">
+                      {canSign && signatureProfiles.length > 0 && (
+                        <div className="flex items-center gap-1.5 mr-1 w-auto sm:w-full sm:col-span-2 sm:mr-0 sm:min-w-0">
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide sm:hidden">Sign</span>
+                          <select
+                            value={selectedSignatureId}
+                            onChange={e => handleSignatureProfileSelect(e.target.value)}
+                            className="h-8 rounded-md border border-border bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 w-auto max-w-[180px] sm:w-full sm:max-w-none"
+                            title={selectedSignatureProfileName ? `Using: ${selectedSignatureProfileName}` : "Select signature"}
+                          >
+                            {signatureProfiles.map(profile => (
+                              <option key={profile.id} value={profile.id}>{profile.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {canSign && selectedFileUrl && !placingMode && (
+                        <button
+                          onClick={() => {
+                            if (!canPlaceSignature) return;
+                            setPdfVisible(true); setPlacingMode(true); setHoverPx(null);
+                          }}
+                          disabled={!canPlaceSignature}
+                          title={!canPlaceSignature ? "Please wait for the selected file to finish loading." : undefined}
+                          className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-600 w-auto sm:w-full sm:col-span-3">
+                          <MousePointer2 className="w-3.5 h-3.5" /> <span className=" sm:hidden">Place Signature</span>
                         </button>
                       )}
                       {canSign && placingMode && (
                         <button onClick={() => { setPlacingMode(false); setHoverPx(null); }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-accent transition">
+                          className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:bg-accent transition w-auto sm:w-full sm:col-span-3">
                           Cancel Placement
                         </button>
                       )}
                       {canSign && pdfBlobUrl && (
-                        <div className="flex items-center gap-1.5 bg-card rounded-lg border border-border p-1 shadow-sm mr-2">
-                          <span className="text-[10px] font-bold text-muted-foreground uppercase px-1 sm:hidden">Batch Sign</span>
+                        <div className="flex items-center justify-center gap-1.5 bg-card rounded-lg border border-border p-1 shadow-sm mr-2 w-auto sm:w-full sm:col-span-3 sm:mr-0 sm:min-w-0 sm:px-2">
+                          <span className=" text-[10px] font-bold text-muted-foreground uppercase px-1 sm:hidden">Batch</span>
                           <button onClick={() => setBatchSignPage(!batchSignPage)} title="Apply to all pages in this file"
                             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition ${batchSignPage ? "bg-blue-600 text-white shadow" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
                             <Layers className="w-3.5 h-3.5" /> <span className="sm:hidden">By Page</span>
@@ -1615,7 +1846,14 @@ const SignDocument = () => {
                     onFileSelect={(fileUrl) => {
                       const matched = doc.files?.find(f => f.file_url === fileUrl);
                       if (matched) switchToFile(matched);
-                      else { setSelectedFileUrl(fileUrl); setPdfVisible(true); loadPdf(fileUrl, { force: true }); }
+                        else {
+                          activeFileIdRef.current = null;
+                          setActiveDocFile(null);
+                          setSelectedFileUrl(fileUrl);
+                          setPdfVisible(true);
+                          setStampPlaced(false);
+                          loadPdf(fileUrl, { force: true, fileId: null, page: 1 });
+                        }
                     }}
                     selectedFileUrl={selectedFileUrl}
                   />

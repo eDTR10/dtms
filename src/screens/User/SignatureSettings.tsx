@@ -4,6 +4,14 @@ import UserLayout from "./UserLayout";
 import { useAuth } from "../Auth/AuthContext";
 import * as pdfjsLib from "pdfjs-dist";
 import { buildStampDataUrl } from "./stampUtils";
+import {
+  SignatureProfile,
+  createSignatureProfileId,
+  ensureSignatureProfiles,
+  setActiveSignatureProfileId,
+  syncLegacyStorageFromProfile,
+  writeSignatureProfiles,
+} from "./signatureProfiles";
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).href;
 
 /**
@@ -77,7 +85,14 @@ const SignatureSettings = () => {
   const [signImageFile, setSignImageFile]       = useState<File | null>(null);
 
   const [p12FileName, setP12FileName] = useState<string>(localStorage.getItem("sig_p12_name") || "");
+  const [p12Data, setP12Data]         = useState<string | null>(localStorage.getItem("sig_p12_data"));
   const [p12Loaded, setP12Loaded]     = useState(!!localStorage.getItem("sig_p12_data"));
+
+  const [profiles, setProfiles] = useState<SignatureProfile[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState("");
+  const [profileName, setProfileName] = useState("Default Signature");
+  const [profileActionMessage, setProfileActionMessage] = useState("");
+  const [profileActionType, setProfileActionType] = useState<"success" | "warning">("success");
 
   const [saved, setSaved] = useState(false);
 
@@ -107,6 +122,143 @@ const SignatureSettings = () => {
       lockedRatio.current = stampWidth / Math.max(1, stampHeight);
     }
     setLockRatio(v => !v);
+  };
+
+  const applyProfileToState = useCallback((profile: SignatureProfile) => {
+    setPassword(profile.password || "");
+    setDisplayName(profile.displayName || "");
+    setPosition(profile.position || "");
+    setTextSizePct(profile.textSizePct || 18);
+    setImgWidthPct(profile.imgWidthPct || 35);
+    setStampWidth(profile.stampWidth || STAMP_BOX_W);
+    setStampHeight(profile.stampHeight || STAMP_BOX_H);
+    setLockRatio(!!profile.lockRatio);
+    setImgTop(profile.imgTop || 5);
+    setImgLeft(profile.imgLeft || 50);
+    setTxtTop(profile.txtTop || 55);
+    setTxtLeft(profile.txtLeft || 50);
+    setShowSignedBy(!!profile.showSignedBy);
+    setFontFamily(profile.fontFamily || "Inter, sans-serif");
+    setIsItalic(!!profile.isItalic);
+    setIsBold(profile.isBold !== false);
+    setNameColor(profile.nameColor || "#1e3a5f");
+    setPositionColor(profile.positionColor || "#2563eb");
+    setSignedByColor(profile.signedByColor || "#64748b");
+    setSignImagePreview(profile.signImageData || null);
+    setSignImageFile(null);
+    setP12FileName(profile.p12Name || "");
+    setP12Data(profile.p12Data || null);
+    setP12Loaded(!!profile.p12Data);
+    lockedRatio.current = (profile.stampWidth || STAMP_BOX_W) / Math.max(1, profile.stampHeight || STAMP_BOX_H);
+  }, []);
+
+  useEffect(() => {
+    const { profiles: loadedProfiles, activeId } = ensureSignatureProfiles();
+    setProfiles(loadedProfiles);
+    setActiveProfileId(activeId);
+    const active = loadedProfiles.find(p => p.id === activeId) || loadedProfiles[0];
+    if (!active) return;
+    setProfileName(active.name || "Default Signature");
+    applyProfileToState(active);
+    syncLegacyStorageFromProfile(active);
+  }, [applyProfileToState]);
+
+  const buildProfileFromState = useCallback((id: string, name: string): SignatureProfile => ({
+    id,
+    name: name.trim() || "Untitled Signature",
+    password,
+    displayName,
+    position,
+    textSizePct,
+    imgWidthPct,
+    stampWidth,
+    stampHeight,
+    lockRatio,
+    imgTop,
+    imgLeft,
+    txtTop,
+    txtLeft,
+    showSignedBy,
+    fontFamily,
+    isItalic,
+    isBold,
+    nameColor,
+    positionColor,
+    signedByColor,
+    signImageData: signImagePreview,
+    p12Name: p12FileName,
+    p12Data,
+    updatedAt: Date.now(),
+  }), [
+    password, displayName, position,
+    textSizePct, imgWidthPct, stampWidth, stampHeight, lockRatio,
+    imgTop, imgLeft, txtTop, txtLeft,
+    showSignedBy, fontFamily, isItalic, isBold,
+    nameColor, positionColor, signedByColor,
+    signImagePreview, p12FileName, p12Data,
+  ]);
+
+  const handleProfileSelect = (id: string) => {
+    const profile = profiles.find(p => p.id === id);
+    if (!profile) return;
+    setActiveProfileId(id);
+    setProfileName(profile.name || "Default Signature");
+    setActiveSignatureProfileId(id);
+    applyProfileToState(profile);
+    syncLegacyStorageFromProfile(profile);
+    setSaved(false);
+  };
+
+  const handleCreateProfile = () => {
+    const newProfile: SignatureProfile = buildProfileFromState(createSignatureProfileId(), `Signature ${profiles.length + 1}`);
+    const next = [...profiles, newProfile];
+    setProfiles(next);
+    setActiveProfileId(newProfile.id);
+    setProfileName(newProfile.name);
+    writeSignatureProfiles(next);
+    setActiveSignatureProfileId(newProfile.id);
+    syncLegacyStorageFromProfile(newProfile);
+    setProfileActionType("success");
+    setProfileActionMessage(`Created profile \"${newProfile.name}\".`);
+    setTimeout(() => setProfileActionMessage(""), 2200);
+    setSaved(false);
+  };
+
+  const handleDuplicateProfile = () => {
+    const source = buildProfileFromState(activeProfileId || createSignatureProfileId(), profileName || "Signature");
+    const cloned = { ...source, id: createSignatureProfileId(), name: `${source.name} Copy`, updatedAt: Date.now() };
+    const next = [...profiles, cloned];
+    setProfiles(next);
+    setActiveProfileId(cloned.id);
+    setProfileName(cloned.name);
+    writeSignatureProfiles(next);
+    setActiveSignatureProfileId(cloned.id);
+    syncLegacyStorageFromProfile(cloned);
+    setProfileActionType("success");
+    setProfileActionMessage(`Added copy \"${cloned.name}\".`);
+    setTimeout(() => setProfileActionMessage(""), 2200);
+    setSaved(false);
+  };
+
+  const handleDeleteProfile = () => {
+    if (profiles.length <= 1) return;
+    const deleting = profiles.find(p => p.id === activeProfileId);
+    const ok = window.confirm(`Delete profile \"${deleting?.name || "this profile"}\"?`);
+    if (!ok) return;
+    const remaining = profiles.filter(p => p.id !== activeProfileId);
+    if (!remaining.length) return;
+    const nextActive = remaining[0];
+    setProfiles(remaining);
+    setActiveProfileId(nextActive.id);
+    setProfileName(nextActive.name);
+    writeSignatureProfiles(remaining);
+    setActiveSignatureProfileId(nextActive.id);
+    applyProfileToState(nextActive);
+    syncLegacyStorageFromProfile(nextActive);
+    setProfileActionType("warning");
+    setProfileActionMessage(`Deleted profile. Switched to \"${nextActive.name}\".`);
+    setTimeout(() => setProfileActionMessage(""), 2600);
+    setSaved(false);
   };
 
   // ── Test Sign state ─────────────────────────────────────────────────────
@@ -439,8 +591,7 @@ const SignatureSettings = () => {
     setP12Loaded(false);
     try {
       const b64 = await fileToBase64(file);
-      localStorage.setItem("sig_p12_data", b64);
-      localStorage.setItem("sig_p12_name", file.name);
+      setP12Data(b64);
       setP12Loaded(true);
     } catch {
       alert("Failed to read P12 file.");
@@ -453,42 +604,23 @@ const SignatureSettings = () => {
   };
 
   const handleSave = () => {
-    localStorage.setItem("sig_password",        password);
-    localStorage.setItem("sig_displayName",     displayName);
-    localStorage.setItem("sig_position",        position);
-    localStorage.setItem("sig_text_size_pct",   String(textSizePct));
-    localStorage.setItem("sig_image_width_pct", String(imgWidthPct));
-    localStorage.setItem("sig_stamp_width",     String(stampWidth));
-    localStorage.setItem("sig_stamp_height",    String(stampHeight));
-    localStorage.setItem("sig_lock_ratio",      String(lockRatio));
-    localStorage.setItem("sig_img_top",         String(imgTop));
-    localStorage.setItem("sig_img_left",        String(imgLeft));
-    localStorage.setItem("sig_txt_top",         String(txtTop));
-    localStorage.setItem("sig_txt_left",        String(txtLeft));
-    localStorage.setItem("sig_show_signed_by",  String(showSignedBy));
-    localStorage.setItem("sig_font_family",       fontFamily);
-    localStorage.setItem("sig_is_italic",         String(isItalic));
-    localStorage.setItem("sig_is_bold",           String(isBold));
-    localStorage.setItem("sig_name_color",        nameColor);
-    localStorage.setItem("sig_pos_color",         positionColor);
-    localStorage.setItem("sig_signed_by_color",   signedByColor);
-    if (signImagePreview) localStorage.setItem("sig_image_data", signImagePreview);
+    const id = activeProfileId || createSignatureProfileId();
+    const updated = buildProfileFromState(id, profileName);
+    const exists = profiles.some(p => p.id === id);
+    const next = exists ? profiles.map(p => (p.id === id ? updated : p)) : [...profiles, updated];
+    setProfiles(next);
+    setActiveProfileId(updated.id);
+    writeSignatureProfiles(next);
+    setActiveSignatureProfileId(updated.id);
+    syncLegacyStorageFromProfile(updated);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
   };
 
   const handleClear = () => {
-    [
-      "sig_password","sig_displayName","sig_position","sig_image_data",
-      "sig_p12_data","sig_p12_name","sig_text_size_pct","sig_image_width_pct",
-      "sig_stamp_width","sig_stamp_height","sig_lock_ratio",
-      "sig_img_top","sig_img_left","sig_txt_top","sig_txt_left",
-      "sig_show_signed_by","sig_font_family","sig_is_italic","sig_is_bold","sig_name_color",
-      "sig_pos_color","sig_signed_by_color",
-    ].forEach(k => localStorage.removeItem(k));
     setPassword(""); setDisplayName(""); setPosition("");
     setSignImagePreview(null); setSignImageFile(null);
-    setP12FileName(""); setP12Loaded(false);
+    setP12FileName(""); setP12Data(null); setP12Loaded(false);
     setTextSizePct(18); setImgWidthPct(35);
     setStampWidth(STAMP_BOX_W); setStampHeight(STAMP_BOX_H);
     setLockRatio(false);
@@ -522,6 +654,60 @@ const SignatureSettings = () => {
           <p className="text-xs text-foreground">
             <span className="font-semibold">Privacy Notice:</span> Your P12 certificate, password, and signing data are stored only in your browser's localStorage. They are never sent to or stored on the server.
           </p>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl px-4 py-3 flex flex-col gap-3">
+          <p className="text-sm font-medium text-foreground">Signature Profiles</p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-1">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Choose profile</label>
+              <select
+                value={activeProfileId}
+                onChange={e => handleProfileSelect(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                {profiles.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Profile name</label>
+              <input
+                value={profileName}
+                onChange={e => setProfileName(e.target.value)}
+                placeholder="e.g. Approver Signature"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </div>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={handleCreateProfile}
+              className="px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:bg-accent transition"
+            >
+              New Profile
+            </button>
+            <button
+              onClick={handleDuplicateProfile}
+              disabled={!profiles.length}
+              className="px-3 py-1.5 rounded-md border border-border text-xs text-muted-foreground hover:bg-accent transition disabled:opacity-50"
+            >
+              Duplicate Current
+            </button>
+            <button
+              onClick={handleDeleteProfile}
+              disabled={profiles.length <= 1}
+              className="px-3 py-1.5 rounded-md border border-destructive/40 text-xs text-destructive hover:bg-destructive/10 transition disabled:opacity-50"
+            >
+              Delete Current
+            </button>
+          </div>
+          {profileActionMessage && (
+            <div className={`rounded-md border px-3 py-2 text-xs ${profileActionType === "warning" ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400" : "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"}`}>
+              {profileActionMessage}
+            </div>
+          )}
         </div>
 
         {/* ── Two-column grid ── */}

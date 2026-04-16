@@ -72,12 +72,16 @@ const STATUS_COLOR: Record<string, string> = {
   Pending:       "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
   "For Sending": "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
   "For Signing": "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  Viewing:       "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  Viewed:        "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
   Completed:     "bg-green-500/10 text-green-600 dark:text-green-400",
   Rejected:      "bg-destructive/10 text-destructive",
 };
 
 const statusLabel = (doc: Document, currentUserId?: number): string => {
   const sigs     = doc.signatories ?? [];
+  const mySig    = sigs.find(s => s.user_id === currentUserId);
+  const isViewer = mySig?.role === "viewer";
   const signers  = sigs.filter(s => s.role !== "viewer");
   const total    = signers.length;
   const signed   = signers.filter(s => s.status === "signed").length;
@@ -86,6 +90,10 @@ const statusLabel = (doc: Document, currentUserId?: number): string => {
   const isSignatory = sigs.some(s => s.user_id === currentUserId);
   const hasSigned = sigs.some(s => s.user_id === currentUserId && s.status === "signed");
   const allSigned = total > 0 && signed === total;
+
+  if (isViewer) {
+    return mySig?.status === "viewed" ? "Viewed (0/0)" : "Viewing (0/0)";
+  }
 
   if (doc.status === "Pending") return "For Sending";
   if (doc.status === "Rejected") return `Rejected (${rejected}/${total})`;
@@ -109,7 +117,11 @@ const statusLabelShort = (doc: Document, currentUserId?: number): string => {
   return full;
 };
 
-const statusBadgeClass = (doc: Document): string => {
+const statusBadgeClass = (doc: Document, currentUserId?: number): string => {
+  const mySig = (doc.signatories ?? []).find(s => s.user_id === currentUserId);
+  if (mySig?.role === "viewer") {
+    return mySig.status === "viewed" ? STATUS_COLOR["Viewed"] : STATUS_COLOR["Viewing"];
+  }
   if (doc.status === "Rejected") return STATUS_COLOR["Rejected"];
   if (doc.status === "Pending")  return STATUS_COLOR["For Sending"];
   const signers  = (doc.signatories ?? []).filter(s => s.role !== "viewer");
@@ -981,7 +993,7 @@ const handleDownload = async (doc: Document) => {
 
   useEffect(() => { setPage(1); }, [search, filter, typeFilter, dateFromFilter, dateToFilter, selectedOffices, selectedProjects]);
 
-  const statuses  = ["All", "For Sending", "For Signing", "Completed", "Signed", "Rejected"];
+  const statuses  = ["All", "For Sending", "For Signing", "Viewing", "Viewed", "Completed", "Signed", "Rejected"];
   const docTypes  = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
   const officeOptions = Array.from(
     new Map(
@@ -1036,16 +1048,24 @@ const handleDownload = async (doc: Document) => {
     } else if (filter === "For Sending") {
       matchFilter = d.status === "Pending";
     } else if (filter === "For Signing") {
-      const isSignatory = d.signatories?.some(s => s.user_id === user?.id);
-      const hasSigned = d.signatories?.some(s => s.user_id === user?.id && s.status === "signed");
-      matchFilter = d.status === "For Signing" && isSignatory && !hasSigned;
+      const myRoute = d.signatories?.find(s => s.user_id === user?.id);
+      const isViewerRoute = myRoute?.role === "viewer";
+      const hasSigned = myRoute?.status === "signed";
+      matchFilter = d.status === "For Signing" && !!myRoute && !isViewerRoute && !hasSigned;
     } else if (filter === "Completed") {
       matchFilter = d.status === "Completed" && d.userID === user?.id;
     } else if (filter === "Signed") {
-      const isSignatory = d.signatories?.some(s => s.user_id === user?.id);
-      const hasSigned = d.signatories?.some(s => s.user_id === user?.id && s.status === "signed");
-      matchFilter = !!(d.status === "Completed" && d.userID !== user?.id && isSignatory && hasSigned) ||
-                   !!(d.status === "For Signing" && isSignatory && hasSigned);
+      const myRoute = d.signatories?.find(s => s.user_id === user?.id);
+      const isViewerRoute = myRoute?.role === "viewer";
+      const hasSigned = myRoute?.status === "signed";
+      matchFilter = !!(d.status === "Completed" && d.userID !== user?.id && !!myRoute && !isViewerRoute && hasSigned) ||
+                   !!(d.status === "For Signing" && !!myRoute && !isViewerRoute && hasSigned);
+    } else if (filter === "Viewing") {
+      const myRoute = d.signatories?.find(s => s.user_id === user?.id);
+      matchFilter = !!myRoute && myRoute.role === "viewer" && myRoute.status !== "viewed";
+    } else if (filter === "Viewed") {
+      const myRoute = d.signatories?.find(s => s.user_id === user?.id);
+      matchFilter = !!myRoute && myRoute.role === "viewer" && myRoute.status === "viewed";
     } else if (filter === "Rejected") {
       matchFilter = d.status === "Rejected";
     }
@@ -1073,10 +1093,22 @@ const handleDownload = async (doc: Document) => {
   const visibleDocs = hasActiveFilters ? filtered : paginated;
 
   const pending    = filtered.filter(d => d.status === "Pending").length;
-  const forSigning = filtered.filter(d => d.status === "For Signing").length;
+  const forSigning = filtered.filter(d => {
+    if (d.status !== "For Signing") return false;
+    const myRoute = d.signatories?.find(s => s.user_id === user?.id);
+    return !!myRoute && myRoute.role !== "viewer" && myRoute.status !== "signed";
+  }).length;
   const completed  = filtered.filter(d => d.status === "Completed" && d.userID === user?.id).length;
   const signedBySelf = filtered.filter(d =>
-    d.signatories.some(s => s.user_id === user?.id && s.status === "signed")
+    d.signatories.some(s => s.user_id === user?.id && s.status === "signed" && s.role !== "viewer")
+  ).length;
+  const viewingCount = filtered.filter(d => {
+    const myRoute = d.signatories?.find(s => s.user_id === user?.id);
+    if (!myRoute || myRoute.role !== "viewer") return false;
+    return myRoute.status !== "viewed";
+  }).length;
+  const viewedCount = filtered.filter(d =>
+    d.signatories.some(s => s.user_id === user?.id && s.role === "viewer" && s.status === "viewed")
   ).length;
 
   const toggleParallel = (index: number) => {
@@ -1100,12 +1132,14 @@ const handleDownload = async (doc: Document) => {
     <UserLayout title="My Documents" subtitle="Documents you created or are assigned to sign">
 
       {/* Quick stats */}
-      <div className="grid grid-cols-4 gap-4 mb-6 lg:grid-cols-2 sm:grid-cols-2">
+      <div className="grid grid-cols-6 gap-4 mb-6 lg:grid-cols-3 sm:grid-cols-2">
         {loading
-          ? [...Array(4)].map((_, i) => <StatCardSkeleton key={i} />)
+          ? [...Array(6)].map((_, i) => <StatCardSkeleton key={i} />)
           : [
               { label: "For Sending",  value: pending,      icon: <Clock className="w-4 h-4" />,        color: "text-yellow-500" },
               { label: "For Signing", value: forSigning,   icon: <Send className="w-4 h-4" />,          color: "text-blue-500" },
+              { label: "Viewing",     value: viewingCount, icon: <Eye className="w-4 h-4" />,           color: "text-amber-500" },
+              { label: "Viewed",      value: viewedCount,  icon: <Eye className="w-4 h-4" />,           color: "text-cyan-500" },
               { label: "Completed",   value: completed,    icon: <CheckCircle2 className="w-4 h-4" />,  color: "text-green-500" },
               { label: "Signed",      value: signedBySelf, icon: <Eye className="w-4 h-4" />,           color: "text-teal-500" },
             ].map(s => (
@@ -1483,7 +1517,7 @@ const handleDownload = async (doc: Document) => {
               </div>
               <p className="text-sm text-foreground font-mono slg:hidden">{doc.tracknumber}</p>
               <p className="text-sm text-muted-foreground slg:hidden">{doc.datesubmitted}</p>
-              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${statusBadgeClass(doc)}`}>
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium w-fit ${statusBadgeClass(doc, user?.id)}`}>
                 <span className="sm:hidden">{statusLabel(doc, user?.id)}</span>
                 <span className="hidden sm:inline">{statusLabelShort(doc, user?.id)}</span>
               </span>
