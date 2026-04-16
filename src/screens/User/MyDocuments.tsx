@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileText, Send, Eye, Clock, CheckCircle2, Search, Download, RefreshCw, Pencil, Trash2, AlertTriangle, Loader2, ChevronLeft, ChevronRight, ChevronDown, GitBranch, Plus, X as XIcon, Link2, Link2Off, PenLine, Printer } from "lucide-react";
+import { FileText, Send, Eye, Clock, CheckCircle2, Search, Download, RefreshCw, Pencil, Trash2, AlertTriangle, Loader2, ChevronLeft, ChevronRight, ChevronDown, GitBranch, Plus, X as XIcon, Link2, Link2Off, PenLine, Printer, Archive, ArchiveRestore } from "lucide-react";
 import { PDFDocument } from "pdf-lib";
 import Swal from "sweetalert2";
 import UserLayout from "./UserLayout";
@@ -202,6 +202,8 @@ const normalizeDateValue = (value?: string | null): string => {
   return `${year}-${month}-${day}`;
 };
 
+const getUserArchiveStorageKey = (userId?: number) => `mydocs_archived_tracks_user_${userId ?? "anon"}`;
+
 const MyDocuments = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -214,6 +216,7 @@ const MyDocuments = () => {
   const [dateToFilter, setDateToFilter] = useState("");
   const [selectedOffices, setSelectedOffices] = useState<string[]>([]);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [archivedTracks, setArchivedTracks] = useState<string[]>([]);
   const [officeSelection, setOfficeSelection] = useState("");
   const [projectSelection, setProjectSelection] = useState("");
   const [typeDropOpen, setTypeDropOpen] = useState(false);
@@ -993,7 +996,46 @@ const handleDownload = async (doc: Document) => {
 
   useEffect(() => { setPage(1); }, [search, filter, typeFilter, dateFromFilter, dateToFilter, selectedOffices, selectedProjects]);
 
-  const statuses  = ["All", "For Sending", "For Signing", "Viewing", "Viewed", "Completed", "Signed", "Rejected"];
+  useEffect(() => {
+    const key = getUserArchiveStorageKey(user?.id);
+    try {
+      const raw = localStorage.getItem(key);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setArchivedTracks(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setArchivedTracks([]);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    const key = getUserArchiveStorageKey(user?.id);
+    localStorage.setItem(key, JSON.stringify(archivedTracks));
+  }, [archivedTracks, user?.id]);
+
+  const isArchivedTrack = (tracknumber: string) => archivedTracks.includes(tracknumber);
+
+  const toggleArchiveTrack = (tracknumber: string) => {
+    setArchivedTracks(prev =>
+      prev.includes(tracknumber)
+        ? prev.filter(t => t !== tracknumber)
+        : [...prev, tracknumber]
+    );
+    setSelectedTracks(prev => prev.filter(t => t !== tracknumber));
+  };
+
+  const archiveSelectedTracks = () => {
+    if (selectedTracks.length === 0) return;
+    setArchivedTracks(prev => Array.from(new Set([...prev, ...selectedTracks])));
+    setSelectedTracks([]);
+  };
+
+  const unarchiveSelectedTracks = () => {
+    if (selectedTracks.length === 0) return;
+    setArchivedTracks(prev => prev.filter(track => !selectedTracks.includes(track)));
+    setSelectedTracks([]);
+  };
+
+  const statuses  = ["All", "For Sending", "For Signing", "Viewing", "Viewed", "Completed", "Signed", "Rejected", "Archived"];
   const docTypes  = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
   const officeOptions = Array.from(
     new Map(
@@ -1066,6 +1108,8 @@ const handleDownload = async (doc: Document) => {
     } else if (filter === "Viewed") {
       const myRoute = d.signatories?.find(s => s.user_id === user?.id);
       matchFilter = !!myRoute && myRoute.role === "viewer" && myRoute.status === "viewed";
+    } else if (filter === "Archived") {
+      matchFilter = isArchivedTrack(d.tracknumber);
     } else if (filter === "Rejected") {
       matchFilter = d.status === "Rejected";
     }
@@ -1076,7 +1120,11 @@ const handleDownload = async (doc: Document) => {
     const matchDateTo = !dateToFilter || (documentDate !== "" && documentDate <= dateToFilter);
     const matchOffice = selectedOffices.length === 0 || selectedOffices.includes(String(d.office));
     const matchProject = selectedProjects.length === 0 || (d.projects ?? []).map(String).some(projectId => selectedProjects.includes(projectId));
-    return matchSearch && matchFilter && matchType && matchDateFrom && matchDateTo && matchOffice && matchProject;
+    const matchArchiveVisibility = filter === "Archived"
+      ? true
+      : !isArchivedTrack(d.tracknumber);
+
+    return matchSearch && matchFilter && matchType && matchDateFrom && matchDateTo && matchOffice && matchProject && matchArchiveVisibility;
   });
 
   const hasActiveFilters =
@@ -1110,6 +1158,7 @@ const handleDownload = async (doc: Document) => {
   const viewedCount = filtered.filter(d =>
     d.signatories.some(s => s.user_id === user?.id && s.role === "viewer" && s.status === "viewed")
   ).length;
+  const archivedCount = docs.filter(d => isArchivedTrack(d.tracknumber)).length;
 
   const toggleParallel = (index: number) => {
     setRoutingSigs(prev => {
@@ -1132,9 +1181,9 @@ const handleDownload = async (doc: Document) => {
     <UserLayout title="My Documents" subtitle="Documents you created or are assigned to sign">
 
       {/* Quick stats */}
-      <div className="grid grid-cols-6 gap-4 mb-6 lg:grid-cols-3 sm:grid-cols-2">
+      <div className="grid grid-cols-7 gap-4 mb-6 xl:grid-cols-4 lg:grid-cols-3 sm:grid-cols-2">
         {loading
-          ? [...Array(6)].map((_, i) => <StatCardSkeleton key={i} />)
+          ? [...Array(7)].map((_, i) => <StatCardSkeleton key={i} />)
           : [
               { label: "For Sending",  value: pending,      icon: <Clock className="w-4 h-4" />,        color: "text-yellow-500" },
               { label: "For Signing", value: forSigning,   icon: <Send className="w-4 h-4" />,          color: "text-blue-500" },
@@ -1142,6 +1191,7 @@ const handleDownload = async (doc: Document) => {
               { label: "Viewed",      value: viewedCount,  icon: <Eye className="w-4 h-4" />,           color: "text-cyan-500" },
               { label: "Completed",   value: completed,    icon: <CheckCircle2 className="w-4 h-4" />,  color: "text-green-500" },
               { label: "Signed",      value: signedBySelf, icon: <Eye className="w-4 h-4" />,           color: "text-teal-500" },
+              { label: "Archived",    value: archivedCount,icon: <Archive className="w-4 h-4" />,       color: "text-indigo-500" },
             ].map(s => (
               <div key={s.label} className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
                 <span className={`p-2 rounded-lg bg-accent ${s.color}`}>{s.icon}</span>
@@ -1243,7 +1293,7 @@ const handleDownload = async (doc: Document) => {
 
         <div className="flex items-center gap-2 flex-wrap">
           {selectedTracks.length > 0 && (
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5">
+            <div className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 md:w-auto">
               <span className="text-xs text-muted-foreground">
                 Folder: <span className="font-medium text-foreground">{supportsDirectorySave() ? downloadDirectoryName : "Browser-managed downloads"}</span>
               </span>
@@ -1342,14 +1392,15 @@ const handleDownload = async (doc: Document) => {
 
         {selectedTracks.length > 0 && (
           <div className="flex flex-col gap-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl animate-in fade-in slide-in-from-top-2">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-blue-700 dark:text-blue-400 ml-2">
+            <div className="flex items-center gap-3 md:flex-col md:items-stretch md:gap-2">
+              <span className="text-sm font-medium text-blue-700 dark:text-blue-400 ml-2 md:ml-0">
                 {selectedTracks.length} document{selectedTracks.length !== 1 ? "s" : ""} selected
               </span>
+              <div className="flex flex-wrap items-center gap-2 md:grid md:grid-cols-2 md:gap-2">
               <button
                 onClick={handleDownloadSelected}
                 disabled={batchDownloading}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition shadow-sm disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition shadow-sm disabled:opacity-50 md:w-full md:justify-center md:py-2"
               >
                 {batchDownloading
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Downloading...</>
@@ -1358,7 +1409,7 @@ const handleDownload = async (doc: Document) => {
               <button
                 onClick={handleSendToDrive}
                 disabled={driveUploading}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 hover:border-slate-300 transition shadow-sm disabled:opacity-50 dark:border-slate-700 dark:bg-white dark:text-slate-800 dark:hover:bg-slate-100"
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 hover:border-slate-300 transition shadow-sm disabled:opacity-50 dark:border-slate-700 dark:bg-white dark:text-slate-800 dark:hover:bg-slate-100 md:w-full md:justify-center md:py-2"
               >
                 {driveUploading
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</>
@@ -1367,7 +1418,7 @@ const handleDownload = async (doc: Document) => {
               <button
                 onClick={handlePrintSelected}
                 disabled={batchPrinting}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 transition shadow-sm disabled:opacity-50"
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 transition shadow-sm disabled:opacity-50 md:w-full md:justify-center md:py-2"
               >
                 {batchPrinting
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Printing...</>
@@ -1375,16 +1426,25 @@ const handleDownload = async (doc: Document) => {
               </button>
               <button
                 onClick={() => navigate(`/dtms/sign/batch?tracks=${selectedTracks.join(",")}`)}
-                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition shadow-sm"
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition shadow-sm md:w-full md:justify-center md:py-2"
               >
                 <PenLine className="w-4 h-4" /> Batch Sign Selected
               </button>
               <button
+                onClick={filter === "Archived" ? unarchiveSelectedTracks : archiveSelectedTracks}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition shadow-sm md:w-full md:justify-center md:py-2"
+              >
+                {filter === "Archived"
+                  ? <><ArchiveRestore className="w-4 h-4" /> Unarchive Selected</>
+                  : <><Archive className="w-4 h-4" /> Archive Selected</>}
+              </button>
+              <button
                 onClick={() => setSelectedTracks([])}
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors md:col-span-2 md:w-full md:rounded-lg md:border md:border-border md:py-2 md:text-center md:hover:bg-accent"
               >
                 Cancel
               </button>
+              </div>
             </div>
             {batchDownloading && (
               <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2">
@@ -1431,8 +1491,12 @@ const handleDownload = async (doc: Document) => {
               </div>
             )}
             {selectedTracks.length < filtered.length && (
-              <p className="text-[11px] text-blue-600/80 px-2">
-                Selected from current view. <button onClick={selectAllFiltered} className="font-bold underline hover:text-blue-800">Select all {filtered.length} documents</button> instead?
+              <p className="px-1 text-[11px] leading-relaxed text-blue-700/90 md:px-2 md:text-blue-600/80">
+                Selected from current view. {" "}
+                <button onClick={selectAllFiltered} className="font-bold underline hover:text-blue-800">
+                  Select all {filtered.length} documents
+                </button>{" "}
+                instead?
               </p>
             )}
           </div>
@@ -1564,6 +1628,17 @@ const handleDownload = async (doc: Document) => {
                     title="Edit document"
                   >
                     <Pencil className="w-4 h-4" />
+                  </button>
+                )}
+                {(
+                  <button
+                    onClick={() => toggleArchiveTrack(doc.tracknumber)}
+                    className="p-1.5 rounded-md text-muted-foreground hover:bg-accent hover:text-indigo-600 transition-colors"
+                    title={isArchivedTrack(doc.tracknumber) ? "Unarchive document" : "Archive document (only for you)"}
+                  >
+                    {isArchivedTrack(doc.tracknumber)
+                      ? <ArchiveRestore className="w-4 h-4" />
+                      : <Archive className="w-4 h-4" />}
                   </button>
                 )}
                 {doc.userID === user?.id && (
