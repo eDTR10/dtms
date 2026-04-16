@@ -288,6 +288,12 @@ export const documentApi = {
       headers: { "Content-Type": "multipart/form-data" },
     }).then(r => r.data),
 
+  /** Upload a single chunk of a large file */
+  uploadChunk: (id: number, formData: FormData) =>
+    api.post(`document/${id}/upload_chunk/`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }).then(r => r.data),
+
   /** List all files for a document */
   listFiles: (id: number, signal?: AbortSignal) =>
     api.get<DocumentFile[]>(`document/${id}/files/`, { signal }).then(r => r.data),

@@ -88,6 +88,20 @@ const CreateDocument = () => {
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const MAX_FILE_SIZE = 12 * 1024 * 1024; // 12MB
+  const validateFiles = (incoming: File[]): { valid: File[]; errors: string[] } => {
+    const valid: File[] = [];
+    const errors: string[] = [];
+    for (const f of incoming) {
+      if (f.size > MAX_FILE_SIZE) {
+        errors.push(`"${f.name}" exceeds the 12MB limit (${(f.size / 1024 / 1024).toFixed(1)} MB).`);
+      } else {
+        valid.push(f);
+      }
+    }
+    return { valid, errors };
+  };
+
   // ── Signatory routing state ───────────────────────────────────────────────
   const [signatories, setSignatories] = useState<SignatoryEntry[]>([]);
   const [fromTemplate, setFromTemplate] = useState(false);
@@ -266,6 +280,8 @@ const CreateDocument = () => {
     }
     setLoading(true);
     try {
+      // Step 1: Create the document record with metadata only (no file) to avoid
+      // 413 Content Too Large from the devtunnel proxy when files are large.
       const fd = new FormData();
       fd.append("userID", String(user?.id ?? 0));
       const selectedTemplate = form.template ? templates.find(t => String(t.id) === form.template) : undefined;
@@ -275,25 +291,21 @@ const CreateDocument = () => {
       fd.append("position", form.position);
       fd.append("message", form.message);
       if (form.template) fd.append("template", form.template);
-      // Append only the first file to document.file for backward compatibility
-      if (files.length > 0) fd.append("file", files[0]);
 
       const doc = await documentApi.create(fd);
 
-      // Upload additional files if there are more than one
-      if (files.length > 1) {
-        for (let i = 1; i < files.length; i++) {
+      // Step 2: Upload each file.
+      for (let i = 0; i < files.length; i++) {
+        try {
           const fileFd = new FormData();
           fileFd.append("file", files[i]);
-          try {
-            await documentApi.uploadFile(doc.id, fileFd);
-          } catch (err) {
-            console.error(`Failed to upload file ${i + 1}:`, err);
-          }
+          await documentApi.uploadFile(doc.id, fileFd);
+        } catch (err) {
+          console.error(`Failed to upload file ${i + 1}:`, err);
         }
       }
 
-      // If signatories assigned → immediately route the document
+      // Step 3: If signatories assigned → immediately route the document
       if (signatories.length > 0) {
         // Normalize signatory orders before sending
         const normalizedSignatories = normalizeSignatoryOrders(signatories);
@@ -494,7 +506,11 @@ const CreateDocument = () => {
                           e.preventDefault();
                           setDragging(false);
                           const dropped = Array.from(e.dataTransfer.files || []).filter(f => f.type === "application/pdf");
-                          if (dropped.length > 0) setFiles(prev => [...prev, ...dropped]);
+                          if (dropped.length > 0) {
+                            const { valid, errors } = validateFiles(dropped);
+                            if (errors.length > 0) setError(errors.join(" "));
+                            if (valid.length > 0) setFiles(prev => [...prev, ...valid]);
+                          }
                         }}
                       >
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition ${dragging ? "bg-primary/20" : "bg-accent group-hover:bg-primary/10"}`}>
@@ -518,7 +534,10 @@ const CreateDocument = () => {
                       className="hidden"
                       onChange={e => {
                         const newFiles = Array.from(e.target.files || []).filter(f => f.type === "application/pdf");
-                        setFiles(prev => [...prev, ...newFiles]);
+                        const { valid, errors } = validateFiles(newFiles);
+                        if (errors.length > 0) setError(errors.join(" "));
+                        if (valid.length > 0) setFiles(prev => [...prev, ...valid]);
+                        e.target.value = "";
                       }}
                     />
                   </>

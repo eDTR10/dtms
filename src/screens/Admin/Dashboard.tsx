@@ -4,6 +4,7 @@ import {
   FileText, Users, Building2, LayoutTemplate,
   Clock, Send, CheckCircle2, XCircle,
   TrendingUp, ArrowRight, RefreshCw, Loader2,
+  Activity, AlertTriangle, BarChart3,
 } from "lucide-react";
 import AdminLayout from "./AdminLayout";
 import { documentApi, userApi, officeApi, templateApi, Document, UserProfile, Office, DocumentTemplate } from "../../services/api";
@@ -12,6 +13,21 @@ import { documentApi, userApi, officeApi, templateApi, Document, UserProfile, Of
 
 const fmtDate = (str: string) =>
   new Date(str).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+const fmtShortMonth = (date: Date) =>
+  date.toLocaleDateString(undefined, { month: "short" });
+
+const pct = (value: number, total: number) =>
+  total > 0 ? Math.round((value / total) * 100) : 0;
+
+const daysSince = (dateString: string) => {
+  const timestamp = new Date(dateString).getTime();
+
+  if (Number.isNaN(timestamp)) return 0;
+
+  const diff = Date.now() - timestamp;
+  return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+};
 
 const STATUS_COLOR: Record<string, string> = {
   Pending:       "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
@@ -27,6 +43,9 @@ const STATUS_BAR: Record<string, string> = {
   Rejected:      "bg-destructive",
 };
 
+const TREND_METRICS = ["All", "Pending", "For Signing", "Completed", "Rejected"] as const;
+type TrendMetric = (typeof TREND_METRICS)[number];
+
 const Dashboard = () => {
   const navigate = useNavigate();
 
@@ -36,6 +55,10 @@ const Dashboard = () => {
   const [templates,  setTemplates]  = useState<DocumentTemplate[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [trendWindow, setTrendWindow] = useState<6 | 12>(6);
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>("All");
+  const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
+  const [hoveredSegmentStatus, setHoveredSegmentStatus] = useState<string | null>(null);
 
   const fetchAll = async (showSpinner = false) => {
     if (showSpinner) setRefreshing(true);
@@ -77,6 +100,38 @@ const Dashboard = () => {
 
   const statuses = ["Pending", "For Signing", "Completed", "Rejected"] as const;
 
+  const statusCounts = {
+    Pending: pending,
+    "For Signing": forSigning,
+    Completed: completed,
+    Rejected: rejected,
+  };
+
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+
+  const completionRate = pct(completed, total);
+  const rejectionRate = pct(rejected, total);
+
+  const routedDocs = docs.filter(doc => doc.total_signatories > 0);
+  const averageSignatories = total > 0
+    ? (docs.reduce((sum, doc) => sum + doc.total_signatories, 0) / total).toFixed(1)
+    : "0.0";
+  const averageWorkflowProgress = routedDocs.length > 0
+    ? Math.round(
+        routedDocs.reduce((sum, doc) => sum + (doc.signed_count / doc.total_signatories) * 100, 0) / routedDocs.length,
+      )
+    : 0;
+
+  const actionableDocs = docs.filter(doc => doc.status === "Pending" || doc.status === "For Signing");
+  const stalledDocs = actionableDocs.filter(doc => daysSince(doc.updatedAt || doc.datesubmitted) >= 7).length;
+  const avgDocumentAge = actionableDocs.length > 0
+    ? Math.round(
+        actionableDocs.reduce((sum, doc) => sum + daysSince(doc.updatedAt || doc.datesubmitted), 0) / actionableDocs.length,
+      )
+    : 0;
+
   const recentDocs = [...docs]
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 8);
@@ -87,6 +142,150 @@ const Dashboard = () => {
   })).sort((a, b) => b.count - a.count).slice(0, 5);
 
   const maxOfficeCount = Math.max(1, ...officeDocCount.map(o => o.count));
+
+  const monthlyTrend = Array.from({ length: trendWindow }, (_, index) => {
+    const date = new Date(currentYear, currentMonth - (trendWindow - 1 - index), 1);
+    const count = docs.filter(doc => {
+      const submittedAt = new Date(doc.datesubmitted);
+      const inMonth = submittedAt.getMonth() === date.getMonth() && submittedAt.getFullYear() === date.getFullYear();
+      if (!inMonth) return false;
+
+      if (trendMetric === "All") return true;
+      return doc.status === trendMetric;
+    }).length;
+
+    return {
+      label: fmtShortMonth(date),
+      fullLabel: date.toLocaleDateString(undefined, { month: "short", year: "numeric" }),
+      count,
+    };
+  });
+
+  const trendThisMonth = monthlyTrend[monthlyTrend.length - 1]?.count ?? 0;
+  const trendLastMonth = monthlyTrend[monthlyTrend.length - 2]?.count ?? 0;
+  const monthlyDelta = trendLastMonth > 0
+    ? Math.round(((trendThisMonth - trendLastMonth) / trendLastMonth) * 100)
+    : trendThisMonth > 0 ? 100 : 0;
+
+  const maxMonthlyCount = Math.max(1, ...monthlyTrend.map(item => item.count));
+
+  const chartWidth = 640;
+  const chartHeight = 260;
+  const chartPaddingX = 28;
+  const chartPaddingTop = 26;
+  const chartPaddingBottom = 34;
+  const usableChartHeight = chartHeight - chartPaddingTop - chartPaddingBottom;
+  const chartStepX = monthlyTrend.length > 1
+    ? (chartWidth - chartPaddingX * 2) / (monthlyTrend.length - 1)
+    : 0;
+
+  const chartPoints = monthlyTrend.map((item, index) => {
+    const x = chartPaddingX + chartStepX * index;
+    const y = chartPaddingTop + (usableChartHeight - (item.count / maxMonthlyCount) * usableChartHeight);
+
+    return {
+      ...item,
+      x,
+      y,
+    };
+  });
+
+  const linePath = chartPoints
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+
+  const areaPath = chartPoints.length > 0
+    ? [
+        `M ${chartPoints[0].x} ${chartHeight - chartPaddingBottom}`,
+        ...chartPoints.map(point => `L ${point.x} ${point.y}`),
+        `L ${chartPoints[chartPoints.length - 1].x} ${chartHeight - chartPaddingBottom}`,
+        "Z",
+      ].join(" ")
+    : "";
+
+  const statusSegments = statuses
+    .map(status => ({
+      status,
+      count: statusCounts[status],
+      color: status === "Pending"
+        ? "#eab308"
+        : status === "For Signing"
+          ? "#3b82f6"
+          : status === "Completed"
+            ? "#22c55e"
+            : "#ef4444",
+    }))
+    .filter(segment => segment.count > 0);
+
+  const statusSegmentsWithAngles = statusSegments.map((segment, index) => {
+    const prevDegrees = statusSegments
+      .slice(0, index)
+      .reduce((sum, prev) => sum + (total > 0 ? (prev.count / total) * 360 : 0), 0);
+    const degrees = total > 0 ? (segment.count / total) * 360 : 0;
+
+    return {
+      ...segment,
+      startAngle: prevDegrees,
+      endAngle: prevDegrees + degrees,
+      percentage: pct(segment.count, total),
+    };
+  });
+
+  const hoveredPoint = hoveredPointIndex !== null ? chartPoints[hoveredPointIndex] : null;
+  const hoveredSegment = statusSegmentsWithAngles.find(segment => segment.status === hoveredSegmentStatus) ?? null;
+
+  const donutBackground = statusSegments.length === 0
+    ? "conic-gradient(#e5e7eb 0deg 360deg)"
+    : (() => {
+        let cursor = 0;
+        const stops = statusSegments.map(segment => {
+          const degrees = (segment.count / total) * 360;
+          const stop = `${segment.color} ${cursor}deg ${cursor + degrees}deg`;
+          cursor += degrees;
+          return stop;
+        });
+
+        return `conic-gradient(${stops.join(", ")})`;
+      })();
+
+  const ageBuckets = [
+    { label: "0-3d", min: 0, max: 3 },
+    { label: "4-7d", min: 4, max: 7 },
+    { label: "8-14d", min: 8, max: 14 },
+    { label: "15d+", min: 15, max: Number.POSITIVE_INFINITY },
+  ].map(bucket => ({
+    label: bucket.label,
+    count: actionableDocs.filter(doc => {
+      const age = daysSince(doc.updatedAt || doc.datesubmitted);
+      return age >= bucket.min && age <= bucket.max;
+    }).length,
+  }));
+
+  const maxAgeBucketCount = Math.max(1, ...ageBuckets.map(bucket => bucket.count));
+
+  const templateUsage = templates.map(template => ({
+    id: template.id,
+    name: template.name,
+    count: docs.filter(doc => doc.template === template.id).length,
+  }))
+    .filter(template => template.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  const maxTemplateUsage = Math.max(1, ...templateUsage.map(template => template.count));
+
+  const requestorMap = docs.reduce<Record<string, number>>((acc, doc) => {
+    const key = doc.requestor?.trim() || "Unknown";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  const topRequestors = Object.entries(requestorMap)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  const maxRequestorCount = Math.max(1, ...topRequestors.map(requestor => requestor.count));
 
   if (loading) return (
     <AdminLayout title="Dashboard" subtitle="Loading...">
@@ -167,7 +366,7 @@ const Dashboard = () => {
           <>
             <div className="flex rounded-full overflow-hidden h-3 gap-px">
               {statuses.map(s => {
-                const count = docs.filter(d => d.status === s).length;
+                const count = statusCounts[s];
                 const pct   = (count / total) * 100;
                 return pct > 0 ? (
                   <div key={s} title={`${s}: ${count}`}
@@ -178,7 +377,7 @@ const Dashboard = () => {
             </div>
             <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2">
               {statuses.map(s => {
-                const count = docs.filter(d => d.status === s).length;
+                const count = statusCounts[s];
                 return count > 0 ? (
                   <span key={s} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span className={`w-2.5 h-2.5 rounded-sm ${STATUS_BAR[s]}`} />
@@ -189,6 +388,280 @@ const Dashboard = () => {
             </div>
           </>
         )}
+      </div>
+
+      <div className="grid grid-cols-[minmax(0,1.45fr)_minmax(320px,0.85fr)] gap-4 mb-6 xl:grid-cols-1">
+        <div className="rounded-[28px] border border-border bg-card p-5 md:p-6 overflow-hidden relative">
+          <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-r from-primary/10 via-sky-500/10 to-emerald-500/10 pointer-events-none" />
+          <div className="relative flex items-start justify-between gap-4 mb-6 flex-wrap">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-primary" /> Operations Pulse
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">A six-month view of submission volume with live workflow context layered in.</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="inline-flex rounded-full border border-border bg-background/80 p-1">
+                {[6, 12].map(windowSize => (
+                  <button
+                    key={windowSize}
+                    onClick={() => {
+                      setTrendWindow(windowSize as 6 | 12);
+                      setHoveredPointIndex(null);
+                    }}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${trendWindow === windowSize ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {windowSize}M
+                  </button>
+                ))}
+              </div>
+              <div className="inline-flex rounded-full border border-border bg-background/80 p-1 max-w-full overflow-x-auto">
+                {TREND_METRICS.map(metric => (
+                  <button
+                    key={metric}
+                    onClick={() => {
+                      setTrendMetric(metric);
+                      setHoveredPointIndex(null);
+                    }}
+                    className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition-colors ${trendMetric === metric ? "bg-sky-500 text-white" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {metric === "All" ? "All Status" : metric}
+                  </button>
+                ))}
+              </div>
+              <span className="inline-flex items-center gap-2 rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-xs text-sky-700">
+                <span className="h-2 w-2 rounded-full bg-sky-500" />
+                {trendThisMonth} this month
+              </span>
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                {monthlyDelta >= 0 ? "+" : ""}{monthlyDelta}% vs last month
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-5 lg:grid-cols-1">
+            <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Submission Volume</p>
+                  <p className="mt-1 text-2xl font-semibold text-foreground">{monthlyTrend.reduce((sum, item) => sum + item.count, 0)} in selected window</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Peak Month</p>
+                  <p className="text-lg font-semibold text-foreground">{maxMonthlyCount}</p>
+                </div>
+              </div>
+
+              <div className="relative h-[320px] w-full overflow-hidden rounded-2xl bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.05),transparent)] px-2 pt-4 sm:h-[260px]">
+                <div className="pointer-events-none absolute inset-0">
+                  {[0, 1, 2, 3].map(row => (
+                    <div
+                      key={row}
+                      className="absolute left-0 right-0 border-t border-dashed border-border/60"
+                      style={{ top: `${20 + row * 23}%` }}
+                    />
+                  ))}
+                </div>
+
+                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="relative z-10 h-full w-full overflow-visible">
+                  <defs>
+                    <linearGradient id="dashboardAreaFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.38" />
+                      <stop offset="55%" stopColor="#14b8a6" stopOpacity="0.18" />
+                      <stop offset="100%" stopColor="#22c55e" stopOpacity="0.04" />
+                    </linearGradient>
+                    <linearGradient id="dashboardLineStroke" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#38bdf8" />
+                      <stop offset="50%" stopColor="#0ea5e9" />
+                      <stop offset="100%" stopColor="#10b981" />
+                    </linearGradient>
+                  </defs>
+
+                  {chartPoints.map(point => (
+                    <line
+                      key={`guide-${point.fullLabel}`}
+                      x1={point.x}
+                      y1={chartPaddingTop}
+                      x2={point.x}
+                      y2={chartHeight - chartPaddingBottom}
+                      stroke="rgba(148, 163, 184, 0.18)"
+                      strokeDasharray="3 7"
+                    />
+                  ))}
+
+                  <path d={areaPath} fill="url(#dashboardAreaFill)" />
+                  <path
+                    d={linePath}
+                    fill="none"
+                    stroke="url(#dashboardLineStroke)"
+                    strokeWidth="5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+
+                  {chartPoints.map((point, pointIndex) => (
+                    <g
+                      key={point.fullLabel}
+                      onMouseEnter={() => setHoveredPointIndex(pointIndex)}
+                      onMouseLeave={() => setHoveredPointIndex(null)}
+                    >
+                      <circle cx={point.x} cy={point.y} r="8" fill="rgba(14, 165, 233, 0.18)" />
+                      <circle cx={point.x} cy={point.y} r="5.5" fill="#0ea5e9" stroke="#ffffff" strokeWidth="2" />
+                      <circle cx={point.x} cy={point.y} r="14" fill="transparent" />
+                      <text x={point.x} y={point.y - 16} textAnchor="middle" className="fill-foreground text-[12px] font-semibold">
+                        {point.count}
+                      </text>
+                    </g>
+                  ))}
+
+                  {hoveredPoint && (
+                    <g>
+                      <rect
+                        x={Math.max(8, Math.min(chartWidth - 172, hoveredPoint.x - 86))}
+                        y={Math.max(8, hoveredPoint.y - 64)}
+                        width="172"
+                        height="48"
+                        rx="10"
+                        fill="rgba(15, 23, 42, 0.92)"
+                        stroke="rgba(148, 163, 184, 0.45)"
+                      />
+                      <text
+                        x={Math.max(14, Math.min(chartWidth - 166, hoveredPoint.x - 80))}
+                        y={Math.max(26, hoveredPoint.y - 42)}
+                        className="fill-white text-[11px]"
+                      >
+                        {hoveredPoint.fullLabel}
+                      </text>
+                      <text
+                        x={Math.max(14, Math.min(chartWidth - 166, hoveredPoint.x - 80))}
+                        y={Math.max(44, hoveredPoint.y - 24)}
+                        className="fill-sky-300 text-[13px] font-semibold"
+                      >
+                        {hoveredPoint.count} document{hoveredPoint.count !== 1 ? "s" : ""}
+                      </text>
+                    </g>
+                  )}
+                </svg>
+
+                <div className={`relative z-10 mt-2 grid gap-2 px-2 text-center text-xs text-muted-foreground ${trendWindow === 12 ? "grid-cols-12" : "grid-cols-6"}`}>
+                  {monthlyTrend.map(item => (
+                    <span key={item.fullLabel} title={item.fullLabel}>{item.label}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 content-start">
+              <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <Activity className="h-4 w-4 text-primary" />
+                  Workflow signal
+                </div>
+                <p className="mt-2 text-3xl font-bold text-foreground">{averageWorkflowProgress}%</p>
+                <p className="mt-1 text-xs text-muted-foreground">Average progress across routed documents.</p>
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                  Active queue
+                </div>
+                <p className="mt-2 text-3xl font-bold text-foreground">{pending + forSigning}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{stalledDocs} stalled and {avgDocumentAge}d average age.</p>
+              </div>
+
+              <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
+                <p className="text-sm font-medium text-foreground">Routing density</p>
+                <p className="mt-2 text-3xl font-bold text-foreground">{averageSignatories}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Average signatories attached per document.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-[28px] border border-border bg-card p-5 md:p-6 overflow-hidden relative">
+          <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-r from-emerald-500/10 via-primary/10 to-rose-500/10 pointer-events-none" />
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-primary" /> Status Orbit
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">A radial view of where documents are sitting in the pipeline right now.</p>
+          </div>
+          <div className="relative z-10 flex flex-col items-center rounded-3xl border border-border/70 bg-background/60 px-5 py-6">
+            <div
+              className="relative grid h-56 w-56 place-items-center rounded-full"
+              style={{ background: donutBackground }}
+              onMouseMove={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                const dx = event.clientX - centerX;
+                const dy = event.clientY - centerY;
+                const radius = Math.sqrt(dx * dx + dy * dy);
+
+                const outerRadius = rect.width / 2;
+                const innerRadius = outerRadius * (36 / 56);
+
+                if (radius < innerRadius || radius > outerRadius || total === 0) {
+                  setHoveredSegmentStatus(null);
+                  return;
+                }
+
+                const angle = (Math.atan2(dy, dx) * 180 / Math.PI + 90 + 360) % 360;
+                const activeSegment = statusSegmentsWithAngles.find(segment => angle >= segment.startAngle && angle < segment.endAngle);
+
+                setHoveredSegmentStatus(activeSegment?.status ?? null);
+              }}
+              onMouseLeave={() => setHoveredSegmentStatus(null)}
+            >
+              <div className="grid h-36 w-36 place-items-center rounded-full border border-border/70 bg-card/95 text-center shadow-sm">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">{hoveredSegment ? (hoveredSegment.status === "Pending" ? "For Sending" : hoveredSegment.status) : "Completion"}</p>
+                  <p className="mt-1 text-3xl font-bold text-foreground">{hoveredSegment ? `${hoveredSegment.percentage}%` : `${completionRate}%`}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{hoveredSegment ? `${hoveredSegment.count} documents` : `${completed} closed`}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 w-full space-y-3">
+              {statusSegmentsWithAngles.map(segment => (
+                <div
+                  key={segment.status}
+                  onMouseEnter={() => setHoveredSegmentStatus(segment.status)}
+                  onMouseLeave={() => setHoveredSegmentStatus(null)}
+                  className={`rounded-2xl border bg-card/80 p-3 transition-colors ${hoveredSegmentStatus === segment.status ? "border-primary/50" : "border-border/70"}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: segment.color }} />
+                      <span className="truncate text-sm text-foreground">{segment.status === "Pending" ? "For Sending" : segment.status}</span>
+                    </div>
+                    <span className="text-sm font-semibold text-foreground">{segment.count}</span>
+                  </div>
+                  <div className="mt-2 h-2 rounded-full bg-accent overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${Math.max(8, segment.percentage)}%`, backgroundColor: segment.color }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{segment.percentage}% of all documents</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 grid w-full grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-border/70 bg-card/80 p-3">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Rejected</p>
+                <p className="mt-1 text-2xl font-semibold text-foreground">{rejectionRate}%</p>
+              </div>
+              <div className="rounded-2xl border border-border/70 bg-card/80 p-3">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Routed</p>
+                <p className="mt-1 text-2xl font-semibold text-foreground">{pct(routedDocs.length, total)}%</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── Two-column section ─────────────────────────────────── */}
@@ -269,6 +742,85 @@ const Dashboard = () => {
             ))}
           </div>
 
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 mt-6 xl:grid-cols-1">
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-foreground">Queue Aging</h3>
+            <p className="mt-1 text-xs text-muted-foreground">How long active documents have been waiting.</p>
+          </div>
+          <div className="space-y-3">
+            {ageBuckets.map(bucket => (
+              <div key={bucket.label} className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-foreground">{bucket.label}</span>
+                  <span className="font-mono text-muted-foreground">{bucket.count}</span>
+                </div>
+                <div className="h-2 rounded-full bg-accent overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-amber-400 to-rose-500 transition-all"
+                    style={{ width: `${bucket.count === 0 ? 0 : Math.max(8, (bucket.count / maxAgeBucketCount) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-foreground">Top Templates</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Most-used document templates across the system.</p>
+          </div>
+          {templateUsage.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No template-linked documents yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {templateUsage.map(template => (
+                <div key={template.id} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-sm text-foreground">{template.name}</span>
+                    <span className="text-xs font-mono text-muted-foreground">{template.count}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-accent overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-orange-400 to-primary transition-all"
+                      style={{ width: `${Math.max(10, (template.count / maxTemplateUsage) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-foreground">Top Requestors</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Users generating the highest document volume.</p>
+          </div>
+          {topRequestors.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No requestor data yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {topRequestors.map(requestor => (
+                <div key={requestor.name} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-sm text-foreground">{requestor.name}</span>
+                    <span className="text-xs font-mono text-muted-foreground">{requestor.count}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-accent overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-teal-400 to-sky-500 transition-all"
+                      style={{ width: `${Math.max(10, (requestor.count / maxRequestorCount) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </AdminLayout>

@@ -50,6 +50,15 @@ const PNPKI_URL = (import.meta.env.VITE_PNPKI_SERVER as string || "").replace(/\
 const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string || "").replace(/\/$/, "");
 
 const ROUTING_PAGE_SIZE = 6;
+const MAX_UPLOAD_FILE_SIZE = 12 * 1024 * 1024; // 12MB
+
+type SigningProgressState = {
+  total: number;
+  completed: number;
+  success: number;
+  failed: number;
+  currentLabel: string;
+};
 
 type StampStyleSnapshot = {
   signatureProfileId: string;
@@ -69,6 +78,13 @@ type StampStyleSnapshot = {
   nameColor: string;
   positionColor: string;
   signedByColor: string;
+};
+
+const getManualUploadSizeError = (file: File): string | null => {
+  if (file.size > MAX_UPLOAD_FILE_SIZE) {
+    return `"${file.name}" exceeds the 12MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB).`;
+  }
+  return null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,6 +236,8 @@ const SignDocument = () => {
   const [signedBlobs, setSignedBlobs] = useState<Array<{ blob: Blob; name: string }>>([]);
   const [selectedFileUrl, setSelectedFileUrl] = useState<string | null>(null);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
+  const [signingProgress, setSigningProgress] = useState<SigningProgressState | null>(null);
+  const [signingFailures, setSigningFailures] = useState<string[]>([]);
   const [signatureProfiles, setSignatureProfiles] = useState<SignatureProfile[]>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState("");
 
@@ -245,7 +263,7 @@ const SignDocument = () => {
   const draggingStamp = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const resizingStamp = useRef<{
     startX: number; startY: number;
-    origW: number; origH: number; origY: number;
+    origW: number; origH: number; origX: number; origY: number;
     corner: "se" | "sw" | "ne" | "nw";
     aspectRatio: number; // FIX #4: locked ratio = origW / origH
   } | null>(null);
@@ -572,7 +590,7 @@ const SignDocument = () => {
         setSigY(clamp(origY - dy, 0, pdfPageHeight - sigBoxH));
       }
       if (resizingStamp.current) {
-        const { startX, startY: _startY, origW, origH, origY, corner, aspectRatio } = resizingStamp.current;
+        const { startX, startY: _startY, origW, origH, origX, origY, corner, aspectRatio } = resizingStamp.current;
         const dw = (clientX - startX) / renderScale;
 
         // FIX #4: derive height from new width to keep ratio locked
@@ -587,7 +605,7 @@ const SignDocument = () => {
           const newH = clamp(newW / aspectRatio, MIN_H, pdfPageHeight);
           setSigBoxW(Math.round(newW));
           setSigBoxH(Math.round(newH));
-          setSigX(prev => clamp(prev + dw, 0, pdfPageWidth - MIN_W));
+          setSigX(clamp(origX + dw, 0, pdfPageWidth - MIN_W));
           setSigY(clamp(origY - (newH - origH), 0, pdfPageHeight - MIN_H));
         } else if (corner === "ne") {
           const newW = clamp(origW + dw, MIN_W, pdfPageWidth);
@@ -599,7 +617,7 @@ const SignDocument = () => {
           const newH = clamp(newW / aspectRatio, MIN_H, pdfPageHeight);
           setSigBoxW(Math.round(newW));
           setSigBoxH(Math.round(newH));
-          setSigX(prev => clamp(prev + dw, 0, pdfPageWidth - MIN_W));
+          setSigX(clamp(origX + dw, 0, pdfPageWidth - MIN_W));
         }
       }
     };
@@ -940,16 +958,44 @@ const SignDocument = () => {
     if (filesToSign.length === 0) { setError("Place your signature on at least one document file first."); return; }
 
     setSigning(true); setError(null);
+    setSigningFailures([]);
+    setSigningProgress({
+      total: 0,
+      completed: 0,
+      success: 0,
+      failed: 0,
+      currentLabel: "Preparing files...",
+    });
     const collected: Array<{ blob: Blob; name: string }> = [];
     try {
       const tok = localStorage.getItem("auth_token");
       const tracksToProcess = isBatchMode ? tracksArray : [doc.tracknumber];
+      const runFailures: string[] = [];
+
+      let totalPlanned = 0;
+      let totalCompleted = 0;
+      let totalSuccess = 0;
+      let totalFailed = 0;
 
       for (const trackNum of tracksToProcess) {
         setBatchProgress(trackNum);
         let currentDoc = doc;
         if (trackNum !== doc.tracknumber) {
-          try { currentDoc = await documentApi.getByTrack(trackNum); } catch (e) { continue; }
+          try { currentDoc = await documentApi.getByTrack(trackNum); }
+          catch (e) {
+            totalFailed += 1;
+            totalCompleted += 1;
+            totalPlanned += 1;
+            runFailures.push(`[${trackNum}] Failed to load document details.`);
+            setSigningProgress({
+              total: totalPlanned,
+              completed: totalCompleted,
+              success: totalSuccess,
+              failed: totalFailed,
+              currentLabel: `Skipping ${trackNum} (load error)`,
+            });
+            continue;
+          }
         }
         if (!currentDoc || !currentDoc.files) continue;
 
@@ -957,82 +1003,128 @@ const SignDocument = () => {
         if ((isBatchMode || batchSignFile) && activeDocFile && stampPlaced) curFilesToSign = currentDoc.files;
         if (curFilesToSign.length === 0) continue;
 
-        const uploadFd = new FormData();
+        totalPlanned += curFilesToSign.length;
+        setSigningProgress({
+          total: totalPlanned,
+          completed: totalCompleted,
+          success: totalSuccess,
+          failed: totalFailed,
+          currentLabel: `Processing ${trackNum}...`,
+        });
+
         let appendedCount = 0;
 
         for (let i = 0; i < curFilesToSign.length; i++) {
           const docFile = curFilesToSign[i];
-          let cfg = fileStampRef.current[docFile.id];
-          if ((isBatchMode || batchSignFile) && activeDocFile) cfg = fileStampRef.current[activeDocFile.id];
-          if (!cfg) continue;
-
-          const res = await fetch(docFile.file_url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
-          if (!res.ok) throw new Error(`Failed to fetch file ${i + 1} for ${trackNum}: HTTP ${res.status}`);
-          const pdfBlob = await res.blob();
-
-          const xRatio = cfg.sigX / cfg.pdfW;
-          const wRatio = cfg.sigBoxW / cfg.pdfW;
-          const hRatio = cfg.sigBoxH / cfg.pdfH;
-          const styleForFile = cfg.style || captureStampStyle();
-          const compositeBlob = await buildStampCanvas(styleForFile, { width: cfg.sigBoxW, height: cfg.sigBoxH });
-          // Server expects y_ratio from the TOP of the page (top-origin).
-          // cfg.sigY is bottom-origin (PDF convention), so convert:
-          //   top_of_box_from_top = pdfH - sigY - sigBoxH
-          const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
-
-          const fd = new FormData();
-          fd.append("pdf_file", pdfBlob, `${trackNum}-${i}.pdf`);
-          fd.append("p12_file", p12File, p12File.name);
-          fd.append("password", password);
-          // Always send signer_name / sign_note — the PNPKI server uses them
-          // for PDF certificate metadata (not the visual stamp).  Visual stamp
-          // appearance is controlled entirely by the sign_design PNG.
-          fd.append("signer_name", styleForFile.displayName || `${user?.first_name} ${user?.last_name}`);
-          fd.append("sign_note",   styleForFile.sigPos || user?.position || "");
-          fd.append("page", String(cfg.sigPage));
-          fd.append("sign_all_pages", batchSignPage ? "true" : "false");
-          fd.append("x_ratio", String(xRatio));
-          fd.append("y_ratio", String(yRatio));
-          fd.append("w_ratio", String(wRatio));
-          fd.append("h_ratio", String(hRatio));
-          if (compositeBlob) fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
-          if (styleForFile.signImagePreview) {
-            try {
-              const [hdr, b64] = styleForFile.signImagePreview.split(",");
-              const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
-              fd.append("sign_image", base64ToFile(b64, "signature.png", mime), "signature.png");
-            } catch {
-              // Ignore malformed preview payload and continue signing.
-            }
-          }
-
-          const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
-          if (!signRes.ok) throw new Error(`PNPKI server error on file ${i + 1} of ${trackNum}.`);
-
-          const signedPdfBlob = await signRes.blob();
-          const signedName = `${trackNum}-signed-${i + 1}.pdf`;
-          collected.push({ blob: signedPdfBlob, name: signedName });
-
-          uploadFd.append(`file_${appendedCount}`, signedPdfBlob, signedName);
-          uploadFd.append(`file_id_${appendedCount}`, String(docFile.id));
-          appendedCount++;
-        }
-
-        if (appendedCount > 0) {
-          const uploadRes = await fetch(`${SERVER_URL}/document/${currentDoc.id}/sign_files/`, {
-            method: "PATCH", headers: tok ? { Authorization: `Token ${tok}` } : {}, body: uploadFd,
+          setSigningProgress({
+            total: totalPlanned,
+            completed: totalCompleted,
+            success: totalSuccess,
+            failed: totalFailed,
+            currentLabel: `${trackNum} • file ${i + 1}/${curFilesToSign.length}`,
           });
-          if (!uploadRes.ok) throw new Error(`Upload failed for ${trackNum}`);
+
+          try {
+            let cfg = fileStampRef.current[docFile.id];
+            if ((isBatchMode || batchSignFile) && activeDocFile) cfg = fileStampRef.current[activeDocFile.id];
+            if (!cfg) throw new Error("No stamp placement found for this file.");
+
+            const res = await fetch(docFile.file_url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+            if (!res.ok) throw new Error(`Fetch failed (HTTP ${res.status}).`);
+            const pdfBlob = await res.blob();
+
+            const xRatio = cfg.sigX / cfg.pdfW;
+            const wRatio = cfg.sigBoxW / cfg.pdfW;
+            const hRatio = cfg.sigBoxH / cfg.pdfH;
+            const styleForFile = cfg.style || captureStampStyle();
+            const compositeBlob = await buildStampCanvas(styleForFile, { width: cfg.sigBoxW, height: cfg.sigBoxH });
+            // Server expects y_ratio from the TOP of the page (top-origin).
+            // cfg.sigY is bottom-origin (PDF convention), so convert:
+            //   top_of_box_from_top = pdfH - sigY - sigBoxH
+            const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
+
+            const fd = new FormData();
+            fd.append("pdf_file", pdfBlob, `${trackNum}-${i}.pdf`);
+            fd.append("p12_file", p12File, p12File.name);
+            fd.append("password", password);
+            // Always send signer_name / sign_note — the PNPKI server uses them
+            // for PDF certificate metadata (not the visual stamp).  Visual stamp
+            // appearance is controlled entirely by the sign_design PNG.
+            fd.append("signer_name", styleForFile.displayName || `${user?.first_name} ${user?.last_name}`);
+            fd.append("sign_note",   styleForFile.sigPos || user?.position || "");
+            fd.append("page", String(cfg.sigPage));
+            fd.append("sign_all_pages", batchSignPage ? "true" : "false");
+            fd.append("x_ratio", String(xRatio));
+            fd.append("y_ratio", String(yRatio));
+            fd.append("w_ratio", String(wRatio));
+            fd.append("h_ratio", String(hRatio));
+            if (compositeBlob) fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
+            if (styleForFile.signImagePreview) {
+              try {
+                const [hdr, b64] = styleForFile.signImagePreview.split(",");
+                const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
+                fd.append("sign_image", base64ToFile(b64, "signature.png", mime), "signature.png");
+              } catch {
+                // Ignore malformed preview payload and continue signing.
+              }
+            }
+
+            const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
+            if (!signRes.ok) throw new Error(`PNPKI sign failed (HTTP ${signRes.status}).`);
+
+            const signedPdfBlob = await signRes.blob();
+            const signedName = `${trackNum}-signed-${i + 1}.pdf`;
+            collected.push({ blob: signedPdfBlob, name: signedName });
+
+            // Upload this single signed file immediately (one request per file to avoid 413)
+            const uploadFd = new FormData();
+            uploadFd.append("file_0", signedPdfBlob, signedName);
+            uploadFd.append("file_id_0", String(docFile.id));
+            const uploadRes = await fetch(`${SERVER_URL}/document/${currentDoc.id}/sign_files/`, {
+              method: "PATCH", headers: tok ? { Authorization: `Token ${tok}` } : {}, body: uploadFd,
+            });
+            if (!uploadRes.ok) throw new Error(`Upload failed (HTTP ${uploadRes.status}).`);
+
+            appendedCount++;
+            totalSuccess++;
+          } catch (fileErr: any) {
+            totalFailed++;
+            runFailures.push(`[${trackNum}] File ${i + 1}: ${fileErr?.message || "Unknown signing error."}`);
+          } finally {
+            totalCompleted++;
+            setSigningProgress({
+              total: totalPlanned,
+              completed: totalCompleted,
+              success: totalSuccess,
+              failed: totalFailed,
+              currentLabel: `${trackNum} • file ${i + 1}/${curFilesToSign.length}`,
+            });
+          }
         }
 
-        const curSig = currentDoc.signatories?.find(s => s.user_id === user?.id && String(s.status).toLowerCase() === "pending");
-        if (curSig) {
-          try { await signatoryApi.update(curSig.id, { status: "signed", remarks: signRemarks }); } catch (e) { }
+        const signedAnyForTrack = appendedCount > 0;
+        if (signedAnyForTrack) {
+          try {
+            // Refresh the document to get fresh signatories after file uploads
+            const freshDoc = await documentApi.getByTrack(trackNum);
+            const curSig = freshDoc.signatories?.find(s => s.user_id === user?.id && String(s.status).toLowerCase() === "pending");
+            if (curSig) {
+              await signatoryApi.update(curSig.id, { status: "signed", remarks: signRemarks });
+            }
+          } catch (e) { /* ignore */ }
         }
       }
 
       setSignedBlobs(collected);
+      setSigningFailures(runFailures);
+      setSigningProgress(null);
       setBatchProgress(null);
+
+      if (totalSuccess === 0) {
+        setError("No files were signed successfully. Please review the errors and try again.");
+        return;
+      }
+
       if (primaryTrack) {
         const updatedPrimaryDoc = await documentApi.getByTrack(primaryTrack);
         setDoc(updatedPrimaryDoc);
@@ -1049,6 +1141,7 @@ const SignDocument = () => {
       setDone(true);
     } catch (err: any) {
       setBatchProgress(null);
+      setSigningProgress(null);
       setError(err?.message || "Signing failed. Please try again.");
     } finally {
       setSigning(false);
@@ -1092,6 +1185,11 @@ const SignDocument = () => {
     if (!doc) return;
     const entries = Object.entries(manualSignedFiles);
     if (entries.length === 0) return;
+    const tooLargeFile = entries.find(([, file]) => file.size > MAX_UPLOAD_FILE_SIZE)?.[1];
+    if (tooLargeFile) {
+      setError(`"${tooLargeFile.name}" exceeds the 12MB limit (${(tooLargeFile.size / 1024 / 1024).toFixed(1)} MB).`);
+      return;
+    }
     setManualUploading(true); setError(null);
     try {
       const token = localStorage.getItem("auth_token");
@@ -1149,7 +1247,7 @@ const SignDocument = () => {
     const onDown = (clientX: number, clientY: number) => {
       resizingStamp.current = {
         startX: clientX, startY: clientY,
-        origW: sigBoxW, origH: sigBoxH, origY: sigY,
+        origW: sigBoxW, origH: sigBoxH, origX: sigX, origY: sigY,
         corner,
         // FIX #4: capture the ratio at the moment the user starts resizing
         aspectRatio: sigBoxW / sigBoxH,
@@ -1215,6 +1313,17 @@ const SignDocument = () => {
 
   const fallbackName = `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim();
   const selectedSignatureProfileName = signatureProfiles.find(p => p.id === selectedSignatureId)?.name || "";
+  const selectedFileName = (() => {
+    const rawPath = activeDocFile?.file_url || selectedFileUrl || "";
+    if (!rawPath) return "";
+    const lastSegment = rawPath.split("/").pop() || rawPath;
+    const cleanName = lastSegment.split("?")[0];
+    try {
+      return decodeURIComponent(cleanName);
+    } catch {
+      return cleanName;
+    }
+  })();
 
   return (
     <UserLayout title="Sign Document" subtitle={isBatchMode ? `Batch Signing ${tracksArray.length} Documents` : doc ? `${doc.tracknumber} — ${doc.title}` : "Loading..."}>
@@ -1228,7 +1337,8 @@ const SignDocument = () => {
               </div>
               {signing && batchProgress && (
                 <div className="flex items-center gap-2 text-[11px] font-mono bg-blue-600 text-white px-2 py-0.5 rounded-full animate-pulse">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Signing: {batchProgress}
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {signingProgress?.currentLabel || `Signing: ${batchProgress}`}
                 </div>
               )}
             </div>
@@ -1241,8 +1351,17 @@ const SignDocument = () => {
               <div className="w-full pl-6 mt-1">
                 <div className="h-1 w-full bg-blue-200 dark:bg-blue-900/40 rounded-full overflow-hidden">
                   <div className="h-full bg-blue-600 transition-all duration-300"
-                    style={{ width: `${((tracksArray.indexOf(batchProgress || "") + 1) / tracksArray.length) * 100}%` }} />
+                    style={{
+                      width: `${signingProgress && signingProgress.total > 0
+                        ? (signingProgress.completed / signingProgress.total) * 100
+                        : 8}%`,
+                    }} />
                 </div>
+                {signingProgress && (
+                  <p className="mt-1 text-[11px] text-blue-700/90 dark:text-blue-300/90">
+                    {signingProgress.completed}/{Math.max(signingProgress.total, signingProgress.completed)} files processed • {signingProgress.success} success • {signingProgress.failed} failed
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -1257,6 +1376,11 @@ const SignDocument = () => {
               <p className="text-sm text-muted-foreground mt-1">
                 The signed PDF has been uploaded. You can sign again if you need to add another signature placement.
               </p>
+              {signingFailures.length > 0 && (
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-2 max-w-xl">
+                  Completed with warnings: {signingFailures.length} file(s) failed and were skipped. Other files continued processing.
+                </p>
+              )}
             </div>
             <div className="flex gap-3 flex-wrap justify-center">
               <button onClick={handleDownload}
@@ -1396,6 +1520,14 @@ const SignDocument = () => {
                    
                     </div>
                   </div>
+
+                  {!!selectedFileName && (
+                    <div className="px-5 py-2 bg-background/60 border-b border-border">
+                      <p className="text-[11px] text-muted-foreground truncate" title={selectedFileName}>
+                        File: <span className="font-mono text-foreground">{selectedFileName}</span>
+                      </p>
+                    </div>
+                  )}
 
                   {pdfVisible && (
                     <div className="overflow-y-auto flex-1">
@@ -1973,7 +2105,15 @@ const SignDocument = () => {
                                 onDrop={e => {
                                   e.preventDefault(); setManualDragging(false);
                                   const f = e.dataTransfer.files[0];
-                                  if (f && f.type === "application/pdf") setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
+                                  if (f && f.type === "application/pdf") {
+                                    const fileErr = getManualUploadSizeError(f);
+                                    if (fileErr) {
+                                      setError(fileErr);
+                                      return;
+                                    }
+                                    setError(null);
+                                    setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
+                                  }
                                 }}
                                 className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-5 cursor-pointer transition ${manualDragging ? "border-primary bg-primary/5" : uploaded ? "border-green-500/50 bg-green-500/5" : "border-border bg-background hover:border-primary/40"}`}>
                                 {uploaded ? (
@@ -1982,7 +2122,18 @@ const SignDocument = () => {
                                   <><Upload className="w-5 h-5 text-muted-foreground" /><p className="text-sm text-muted-foreground">Drop PDF here or <span className="text-primary font-medium">click to browse</span></p><p className="text-xs text-muted-foreground">Scanned / photographed copy (PDF only)</p></>
                                 )}
                                 <input type="file" accept="application/pdf" className="hidden"
-                                  onChange={e => { const f = e.target.files?.[0]; if (f) setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f })); }} />
+                                  onChange={e => {
+                                    const f = e.target.files?.[0];
+                                    if (!f) return;
+                                    const fileErr = getManualUploadSizeError(f);
+                                    if (fileErr) {
+                                      setError(fileErr);
+                                      e.target.value = "";
+                                      return;
+                                    }
+                                    setError(null);
+                                    setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
+                                  }} />
                               </label>
                             </div>
                           );
@@ -2028,6 +2179,42 @@ const SignDocument = () => {
                       <div className="bg-card border border-border rounded-xl overflow-hidden">
                     
                       </div>
+
+                      {signing && signingProgress && (
+                        <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3">
+                          <div className="flex items-center gap-2 text-sm text-blue-700 dark:text-blue-300">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span className="font-medium">{signingProgress.currentLabel || "Signing in progress..."}</span>
+                          </div>
+                          <div className="mt-2 h-1.5 w-full rounded-full bg-blue-200/70 dark:bg-blue-900/40 overflow-hidden">
+                            <div
+                              className="h-full bg-blue-600 transition-all duration-300"
+                              style={{
+                                width: `${signingProgress.total > 0
+                                  ? (signingProgress.completed / signingProgress.total) * 100
+                                  : 8}%`,
+                              }}
+                            />
+                          </div>
+                          <p className="mt-1 text-[11px] text-blue-700/90 dark:text-blue-300/90">
+                            {signingProgress.completed}/{Math.max(signingProgress.total, signingProgress.completed)} processed • {signingProgress.success} success • {signingProgress.failed} failed
+                          </p>
+                        </div>
+                      )}
+
+                      {!signing && signingFailures.length > 0 && (
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300">
+                          <p className="font-semibold mb-1">Some files were skipped due to errors:</p>
+                          <div className="space-y-1 max-h-28 overflow-auto pr-1">
+                            {signingFailures.slice(0, 8).map((failure, idx) => (
+                              <p key={`${failure}-${idx}`} className="break-words">• {failure}</p>
+                            ))}
+                            {signingFailures.length > 8 && (
+                              <p>• ...and {signingFailures.length - 8} more</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       {error && (
                         <div className="flex items-center gap-2 bg-destructive/10 border border-destructive/30 text-destructive text-sm rounded-xl px-4 py-3">
