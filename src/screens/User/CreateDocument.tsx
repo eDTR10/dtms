@@ -801,12 +801,12 @@ const CreateDocument = () => {
                               <div className="flex gap-1">
                                 <button type="button" onClick={() => setSigPage(p => p - 1)}
                                   disabled={sigPage === 0}
-                                  className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">
+                                  className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition text-muted-foreground">
                                   ‹ Prev
                                 </button>
                                 <button type="button" onClick={() => setSigPage(p => p + 1)}
                                   disabled={sigPage >= totalSigPages - 1}
-                                  className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">
+                                  className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition text-muted-foreground">
                                   Next ›
                                 </button>
                               </div>
