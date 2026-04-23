@@ -4,13 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/dtms/logo.png" />
     <link
-    rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"
-  />
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
     <title>DTMS</title>
     <script type="text/javascript">
+      // GitHub Pages SPA redirect restore.
+      // The 404.html encodes the path as a ?/ query string.
+      // This script decodes it back into the real URL before React loads.
       (function (l) {
         if (l.search[1] === "/") {
           var decoded = l.search
