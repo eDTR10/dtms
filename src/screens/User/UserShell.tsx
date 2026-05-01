@@ -8,28 +8,28 @@ import {
   X,
   UserCircle,
 } from "lucide-react";
-import viteLogo from "/logo.png";
+import viteLogo from "./../../assets/logo.png";
 import { useAuth } from "../Auth/AuthContext";
 
 // ── Sidebar open/close context (shared with UserLayout header) ─────────────
 interface ShellCtx { open: boolean; setOpen: (v: boolean) => void; inShell: boolean }
-export const UserShellContext = createContext<ShellCtx>({ open: false, setOpen: () => {}, inShell: false });
+export const UserShellContext = createContext<ShellCtx>({ open: false, setOpen: () => { }, inShell: false });
 export const useUserShell = () => useContext(UserShellContext);
 
 // ── Nav items ──────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
-  { label: "My Documents", icon: <FileText className="w-4 h-4" />,   to: "/dtms/user/documents" },
-  { label: "Create",        icon: <PlusCircle className="w-4 h-4" />, to: "/dtms/user/create" },
-  { label: "Settings",      icon: <Settings className="w-4 h-4" />,   to: "/dtms/user/settings" },
-  { label: "Profile",       icon: <UserCircle className="w-4 h-4" />, to: "/dtms/user/profile" },
+  { label: "My Documents", icon: <FileText className="w-4 h-4" />, to: "/dtms/user/documents" },
+  { label: "Create", icon: <PlusCircle className="w-4 h-4" />, to: "/dtms/user/create" },
+  { label: "Settings", icon: <Settings className="w-4 h-4" />, to: "/dtms/user/settings" },
+  { label: "Profile", icon: <UserCircle className="w-4 h-4" />, to: "/dtms/user/profile" },
 ];
 
 // ── Shell ──────────────────────────────────────────────────────────────────
 const UserShell = () => {
-  const { pathname }     = useLocation();
-  const navigate         = useNavigate();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const [open, setOpen]  = useState(false);
+  const [open, setOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -77,11 +77,10 @@ const UserShell = () => {
                   key={item.label}
                   to={item.to}
                   onClick={() => setOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                    }`}
                 >
                   {item.icon}{item.label}
                 </Link>

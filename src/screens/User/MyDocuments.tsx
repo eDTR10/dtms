@@ -69,24 +69,24 @@ const GoogleDriveIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
 );
 
 const STATUS_COLOR: Record<string, string> = {
-  Pending:       "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+  Pending: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
   "For Sending": "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
   "For Signing": "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-  Viewing:       "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  Viewed:        "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
-  Completed:     "bg-green-500/10 text-green-600 dark:text-green-400",
-  Rejected:      "bg-destructive/10 text-destructive",
+  Viewing: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  Viewed: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
+  Completed: "bg-green-500/10 text-green-600 dark:text-green-400",
+  Rejected: "bg-destructive/10 text-destructive",
 };
 
 const statusLabel = (doc: Document, currentUserId?: number): string => {
-  const sigs     = doc.signatories ?? [];
-  const mySig    = sigs.find(s => s.user_id === currentUserId);
+  const sigs = doc.signatories ?? [];
+  const mySig = sigs.find(s => s.user_id === currentUserId);
   const isViewer = mySig?.role === "viewer";
-  const signers  = sigs.filter(s => s.role !== "viewer");
-  const total    = signers.length;
-  const signed   = signers.filter(s => s.status === "signed").length;
+  const signers = sigs.filter(s => s.role !== "viewer");
+  const total = signers.length;
+  const signed = signers.filter(s => s.status === "signed").length;
   const rejected = signers.filter(s => s.status === "rejected").length;
-  const isOwner  = doc.userID === currentUserId;
+  const isOwner = doc.userID === currentUserId;
   const isSignatory = sigs.some(s => s.user_id === currentUserId);
   const hasSigned = sigs.some(s => s.user_id === currentUserId && s.status === "signed");
   const allSigned = total > 0 && signed === total;
@@ -123,8 +123,8 @@ const statusBadgeClass = (doc: Document, currentUserId?: number): string => {
     return mySig.status === "viewed" ? STATUS_COLOR["Viewed"] : STATUS_COLOR["Viewing"];
   }
   if (doc.status === "Rejected") return STATUS_COLOR["Rejected"];
-  if (doc.status === "Pending")  return STATUS_COLOR["For Sending"];
-  const signers  = (doc.signatories ?? []).filter(s => s.role !== "viewer");
+  if (doc.status === "Pending") return STATUS_COLOR["For Sending"];
+  const signers = (doc.signatories ?? []).filter(s => s.role !== "viewer");
   const allSigned = signers.length > 0 && signers.every(s => s.status === "signed");
   if (allSigned || doc.status === "Completed") return STATUS_COLOR["Completed"];
   return STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground";
@@ -195,11 +195,11 @@ const getUserArchiveStorageKey = (userId?: number) => `mydocs_archived_tracks_us
 const MyDocuments = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [docs, setDocs]     = useState<Document[]>([]);
+  const [docs, setDocs] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch]           = useState("");
-  const [filter, setFilter]           = useState<string>("All");
-  const [typeFilter, setTypeFilter]   = useState<string>("All");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<string>("Incomplete");
+  const [typeFilter, setTypeFilter] = useState<string>("All");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [selectedOffices, setSelectedOffices] = useState<string[]>([]);
@@ -208,10 +208,10 @@ const MyDocuments = () => {
   const [officeSelection, setOfficeSelection] = useState("");
   const [projectSelection, setProjectSelection] = useState("");
   const [typeDropOpen, setTypeDropOpen] = useState(false);
-  const typeDropRef                    = useRef<HTMLDivElement>(null);
-  const [page, setPage]               = useState(1);
-  const isIdleRef                      = useRef(true);
-  const idleTimerRef                   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typeDropRef = useRef<HTMLDivElement>(null);
+  const [page, setPage] = useState(1);
+  const isIdleRef = useRef(true);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -236,31 +236,31 @@ const MyDocuments = () => {
   }, []);
 
   const [downloading, setDownloading] = useState<number | null>(null);
-  const [resendDoc, setResendDoc]     = useState<Document | null>(null);
-  const [resending,  setResending]    = useState(false);
+  const [resendDoc, setResendDoc] = useState<Document | null>(null);
+  const [resending, setResending] = useState(false);
   const [resendError, setResendError] = useState<string | null>(null);
 
-  const [editDoc,    setEditDoc]    = useState<Document | null>(null);
-  const [editTitle,  setEditTitle]  = useState("");
-  const [editType,   setEditType]   = useState("");
-  const [editMsg,    setEditMsg]    = useState("");
-  const [editFile,   setEditFile]   = useState<File | null>(null);
+  const [editDoc, setEditDoc] = useState<Document | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editType, setEditType] = useState("");
+  const [editMsg, setEditMsg] = useState("");
+  const [editFile, setEditFile] = useState<File | null>(null);
   const [editSaving, setEditSaving] = useState(false);
-  const [editError,  setEditError]  = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
 
   interface RoutingSig { user_id: number; user_email: string; user_name: string; order: number; }
-  const [routingDoc,    setRoutingDoc]    = useState<Document | null>(null);
-  const [routingSigs,   setRoutingSigs]   = useState<RoutingSig[]>([]);
-  const [routingOffices,setRoutingOffices]= useState<Office[]>([]);
-  const [routingUsers,  setRoutingUsers]  = useState<SignatoryUser[]>([]);
+  const [routingDoc, setRoutingDoc] = useState<Document | null>(null);
+  const [routingSigs, setRoutingSigs] = useState<RoutingSig[]>([]);
+  const [routingOffices, setRoutingOffices] = useState<Office[]>([]);
+  const [routingUsers, setRoutingUsers] = useState<SignatoryUser[]>([]);
   const [routingOffice, setRoutingOffice] = useState("");
   const [routingSearch, setRoutingSearch] = useState("");
-  const [routingPage,   setRoutingPage]   = useState(0);
+  const [routingPage, setRoutingPage] = useState(0);
   const [routingSaving, setRoutingSaving] = useState(false);
-  const [routingError,  setRoutingError]  = useState<string | null>(null);
+  const [routingError, setRoutingError] = useState<string | null>(null);
 
-  const [deleteDoc,  setDeleteDoc]  = useState<Document | null>(null);
-  const [deleting,   setDeleting]   = useState(false);
+  const [deleteDoc, setDeleteDoc] = useState<Document | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [batchDownloading, setBatchDownloading] = useState(false);
   const [batchPrinting, setBatchPrinting] = useState(false);
@@ -909,8 +909,8 @@ const MyDocuments = () => {
     setSelectedTracks([]);
   };
 
-  const statuses  = ["All", "For Sending", "For Signing", "Viewing", "Viewed", "Incomplete", "Completed", "Signed", "Rejected", "Archived"];
-  const docTypes  = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
+  const statuses = ["Incomplete", "For Signing", "Signed", "All", "Archived", "Completed", "For Sending", "Rejected", "Viewed", "Viewing"];
+  const docTypes = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
   const officeOptions = Array.from(
     new Map(docs.filter(d => d.office != null && d.office_name).map(d => [String(d.office), d.office_name as string])).entries()
   ).map(([value, label]) => ({ value, label }));
@@ -953,14 +953,14 @@ const MyDocuments = () => {
   const allNonArchivedDocs = docs.filter(d => !isArchivedTrack(d.tracknumber));
 
   const statCounts = {
-    pending:       allNonArchivedDocs.filter(d => getDisplayStatus(d) === "For Sending").length,
-    forSigning:    allNonArchivedDocs.filter(d => getDisplayStatus(d) === "For Signing").length,
-    viewingCount:  allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Viewing").length,
-    viewedCount:   allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Viewed").length,
-    incomplete:    allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Incomplete").length,
-    completed:     allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Completed").length,
-    signedBySelf:  allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Signed").length,
-    archived:      docs.filter(d => isArchivedTrack(d.tracknumber)).length,
+    pending: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "For Sending").length,
+    forSigning: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "For Signing").length,
+    viewingCount: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Viewing").length,
+    viewedCount: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Viewed").length,
+    incomplete: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Incomplete").length,
+    completed: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Completed").length,
+    signedBySelf: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Signed").length,
+    archived: docs.filter(d => isArchivedTrack(d.tracknumber)).length,
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1003,12 +1003,12 @@ const MyDocuments = () => {
   // PAGINATION: always slice filtered; never bypass it
   // ─────────────────────────────────────────────────────────────────────────────
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const toggleParallel = (index: number) => {
     setRoutingSigs(prev => {
       const updated = prev.map(s => ({ ...s }));
-      const above   = updated[index - 1];
+      const above = updated[index - 1];
       const current = updated[index];
       if (current.order === above.order) {
         const threshold = current.order;
@@ -1030,23 +1030,23 @@ const MyDocuments = () => {
         {loading
           ? [...Array(8)].map((_, i) => <StatCardSkeleton key={i} />)
           : [
-              { label: "For Sending",  value: statCounts.pending,      icon: <Clock className="w-4 h-4" />,          color: "text-yellow-500" },
-              { label: "For Signing",  value: statCounts.forSigning,   icon: <Send className="w-4 h-4" />,           color: "text-blue-500" },
-              { label: "Viewing",      value: statCounts.viewingCount,  icon: <Eye className="w-4 h-4" />,            color: "text-amber-500" },
-              { label: "Viewed",       value: statCounts.viewedCount,   icon: <Eye className="w-4 h-4" />,            color: "text-cyan-500" },
-              { label: "Incomplete",   value: statCounts.incomplete,    icon: <FileSymlink className="w-4 h-4" />,    color: "text-blue-500" },
-              { label: "Completed",    value: statCounts.completed,     icon: <CheckCircle2 className="w-4 h-4" />,   color: "text-green-500" },
-              { label: "Signed",       value: statCounts.signedBySelf,  icon: <Eye className="w-4 h-4" />,            color: "text-teal-500" },
-              { label: "Archived",     value: statCounts.archived,      icon: <Archive className="w-4 h-4" />,        color: "text-indigo-500" },
-            ].map(s => (
-              <div key={s.label} className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
-                <span className={`p-2 rounded-lg bg-accent ${s.color}`}>{s.icon}</span>
-                <div>
-                  <p className="text-2xl font-bold text-foreground">{s.value}</p>
-                  <p className="text-xs text-muted-foreground">{s.label}</p>
-                </div>
+            { label: "For Sending", value: statCounts.pending, icon: <Clock className="w-4 h-4" />, color: "text-yellow-500" },
+            { label: "For Signing", value: statCounts.forSigning, icon: <Send className="w-4 h-4" />, color: "text-blue-500" },
+            { label: "Viewing", value: statCounts.viewingCount, icon: <Eye className="w-4 h-4" />, color: "text-amber-500" },
+            { label: "Viewed", value: statCounts.viewedCount, icon: <Eye className="w-4 h-4" />, color: "text-cyan-500" },
+            { label: "Incomplete", value: statCounts.incomplete, icon: <FileSymlink className="w-4 h-4" />, color: "text-blue-500" },
+            { label: "Completed", value: statCounts.completed, icon: <CheckCircle2 className="w-4 h-4" />, color: "text-green-500" },
+            { label: "Signed", value: statCounts.signedBySelf, icon: <Eye className="w-4 h-4" />, color: "text-teal-500" },
+            { label: "Archived", value: statCounts.archived, icon: <Archive className="w-4 h-4" />, color: "text-indigo-500" },
+          ].map(s => (
+            <div key={s.label} className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
+              <span className={`p-2 rounded-lg bg-accent ${s.color}`}>{s.icon}</span>
+              <div>
+                <p className="text-2xl font-bold text-foreground">{s.value}</p>
+                <p className="text-xs text-muted-foreground">{s.label}</p>
               </div>
-            ))
+            </div>
+          ))
         }
       </div>
 
@@ -1065,11 +1065,10 @@ const MyDocuments = () => {
           <div ref={typeDropRef} className="relative shrink-0 sm:w-full">
             <button
               onClick={() => setTypeDropOpen(o => !o)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-colors sm:w-full ${
-                typeFilter !== "All"
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border bg-background text-foreground hover:bg-accent"
-              }`}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-colors sm:w-full ${typeFilter !== "All"
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border bg-background text-foreground hover:bg-accent"
+                }`}
             >
               <span className="truncate max-w-[140px]">{typeFilter === "All" ? "All Types" : typeFilter}</span>
               {typeFilter !== "All" && (
@@ -1087,9 +1086,8 @@ const MyDocuments = () => {
                 <div className="px-2 pb-2 flex flex-col gap-0.5 max-h-56 overflow-y-auto">
                   {docTypes.map(t => (
                     <button key={t} onClick={() => { setTypeFilter(t); setTypeDropOpen(false); }}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                        typeFilter === t ? "bg-primary text-primary-foreground font-medium" : "text-foreground hover:bg-accent"
-                      }`}>
+                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${typeFilter === t ? "bg-primary text-primary-foreground font-medium" : "text-foreground hover:bg-accent"
+                        }`}>
                       {t === "All" ? "All Types" : t}
                     </button>
                   ))}
@@ -1117,9 +1115,8 @@ const MyDocuments = () => {
         <div className="flex gap-1.5 flex-wrap">
           {statuses.map(s => (
             <button key={s} onClick={() => setFilter(s)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                filter === s ? "bg-primary text-primary-foreground" : "bg-accent text-muted-foreground hover:text-foreground"
-              }`}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filter === s ? "bg-primary text-primary-foreground" : "bg-accent text-muted-foreground hover:text-foreground"
+                }`}
             >{s}</button>
           ))}
         </div>
@@ -1433,9 +1430,8 @@ const MyDocuments = () => {
               </button>
               {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
                 <button key={n} onClick={() => setPage(n)}
-                  className={`min-w-[2rem] h-8 rounded-md text-xs font-medium border transition-colors ${
-                    n === page ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}>
+                  className={`min-w-[2rem] h-8 rounded-md text-xs font-medium border transition-colors ${n === page ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                    }`}>
                   {n}
                 </button>
               ))}
@@ -1491,11 +1487,10 @@ const MyDocuments = () => {
                                 <button type="button"
                                   title={isParallelWithAbove ? "Click to sign separately (after above)" : "Click to sign at the same time as above"}
                                   onClick={() => toggleParallel(i)}
-                                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${
-                                    isParallelWithAbove
-                                      ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
-                                      : "bg-accent text-muted-foreground hover:bg-accent hover:text-foreground"
-                                  }`}>
+                                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${isParallelWithAbove
+                                    ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
+                                    : "bg-accent text-muted-foreground hover:bg-accent hover:text-foreground"
+                                    }`}>
                                   {isParallelWithAbove
                                     ? <><Link2 className="w-3 h-3" /> parallel — click to separate</>
                                     : <><Link2Off className="w-3 h-3" /> sequential — click to parallelize</>}

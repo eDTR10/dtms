@@ -1,7 +1,7 @@
 import { useState, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { authApi } from "../../services/api";
-import viteLogo from "/logo.png";
+import viteLogo from "./../../assets/logo.png";
 import Swal from "sweetalert2";
 
 const Register = () => {
@@ -25,7 +25,7 @@ const Register = () => {
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!form.first_name) newErrors.first_name = "First name is required.";
-    if (!form.last_name)  newErrors.last_name  = "Last name is required.";
+    if (!form.last_name) newErrors.last_name = "Last name is required.";
     if (!form.email) newErrors.email = "Email is required.";
     else if (!/\S+@\S+\.\S+/.test(form.email))
       newErrors.email = "Enter a valid email address.";
@@ -75,10 +75,10 @@ const Register = () => {
   };
 
   const fields: { name: keyof typeof form; label: string; type: string; placeholder: string }[] = [
-    { name: "first_name",  label: "First Name",       type: "text",     placeholder: "Juan" },
-    { name: "last_name",   label: "Last Name",        type: "text",     placeholder: "Dela Cruz" },
-    { name: "email",       label: "Email address",    type: "email",    placeholder: "you@example.com" },
-    { name: "password",    label: "Password",         type: "password", placeholder: "Min. 8 characters" },
+    { name: "first_name", label: "First Name", type: "text", placeholder: "Juan" },
+    { name: "last_name", label: "Last Name", type: "text", placeholder: "Dela Cruz" },
+    { name: "email", label: "Email address", type: "email", placeholder: "you@example.com" },
+    { name: "password", label: "Password", type: "password", placeholder: "Min. 8 characters" },
     { name: "re_password", label: "Confirm Password", type: "password", placeholder: "Repeat your password" },
   ];
 
@@ -130,11 +130,10 @@ const Register = () => {
                   value={form[name]}
                   onChange={handleChange}
                   placeholder={placeholder}
-                  className={`w-full rounded-lg border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition ${
-                    errors[name]
-                      ? "border-destructive focus:border-destructive"
-                      : "border-border focus:border-primary"
-                  }`}
+                  className={`w-full rounded-lg border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition ${errors[name]
+                    ? "border-destructive focus:border-destructive"
+                    : "border-border focus:border-primary"
+                    }`}
                 />
                 {errors[name] && (
                   <p className="text-xs text-destructive mt-0.5">{errors[name]}</p>

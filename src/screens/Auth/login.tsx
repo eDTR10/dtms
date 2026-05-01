@@ -1,6 +1,6 @@
 import { useState, FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import viteLogo from "/logo.png";
+import viteLogo from "./../../assets/logo.png";
 import { ModeToggle } from "../../components/mode-toggle";
 import { useAuth } from "./AuthContext";
 
