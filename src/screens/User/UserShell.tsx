@@ -7,6 +7,7 @@ import {
   LogOut,
   X,
   UserCircle,
+  MessageSquare,
 } from "lucide-react";
 import viteLogo from "./../../assets/logo.png";
 import { useAuth } from "../Auth/AuthContext";
@@ -20,8 +21,10 @@ export const useUserShell = () => useContext(UserShellContext);
 const NAV_ITEMS = [
   { label: "My Documents", icon: <FileText className="w-4 h-4" />, to: "/dtms/user/documents" },
   { label: "Create", icon: <PlusCircle className="w-4 h-4" />, to: "/dtms/user/create" },
+  { label: "Suggestions", icon: <MessageSquare className=" w-4 h-4" />, to: "/dtms/user/suggestions" },
   { label: "Settings", icon: <Settings className="w-4 h-4" />, to: "/dtms/user/settings" },
   { label: "Profile", icon: <UserCircle className="w-4 h-4" />, to: "/dtms/user/profile" },
+
 ];
 
 // ── Shell ──────────────────────────────────────────────────────────────────

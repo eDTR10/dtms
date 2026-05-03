@@ -170,8 +170,8 @@ export const authApi = {
 // ── Offices ───────────────────────────────────────────────────────────────────
 
 export const officeApi = {
-  list:   (signal?: AbortSignal) => api.get<Office[]>("office/", { signal }).then(r => r.data),
-  get:    (id: number, signal?: AbortSignal) => api.get<Office>(`office/${id}/`, { signal }).then(r => r.data),
+  list: (signal?: AbortSignal) => api.get<Office[]>("office/", { signal }).then(r => r.data),
+  get: (id: number, signal?: AbortSignal) => api.get<Office>(`office/${id}/`, { signal }).then(r => r.data),
   create: (data: Partial<Office>) => api.post<Office>("office/", data).then(r => r.data),
   update: (id: number, data: Partial<Office>) => api.put<Office>(`office/${id}/`, data).then(r => r.data),
   delete: (id: number) => api.delete(`office/${id}/`),
@@ -180,9 +180,9 @@ export const officeApi = {
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 export const userApi = {
-  list:         (signal?: AbortSignal)         => api.get<UserProfile[]>("users/all/", { signal }).then(r => r.data),
-  signatories:  (signal?: AbortSignal)         => api.get<SignatoryUser[]>("users/signatories/", { signal }).then(r => r.data),
-  get:          (id: number, signal?: AbortSignal) => api.get<UserProfile>(`users/user/${id}/`, { signal }).then(r => r.data),
+  list: (signal?: AbortSignal) => api.get<UserProfile[]>("users/all/", { signal }).then(r => r.data),
+  signatories: (signal?: AbortSignal) => api.get<SignatoryUser[]>("users/signatories/", { signal }).then(r => r.data),
+  get: (id: number, signal?: AbortSignal) => api.get<UserProfile>(`users/user/${id}/`, { signal }).then(r => r.data),
   update: (id: number, data: Partial<UserProfile> & { password?: string }) =>
     api.put<UserProfile>(`users/update/${id}/`, data).then(r => r.data),
   create: (data: Partial<UserProfile> & { password: string; re_password: string }) =>
@@ -200,8 +200,8 @@ export const userApi = {
 // ── Document Templates ────────────────────────────────────────────────────────
 
 export const templateApi = {
-  list:   (signal?: AbortSignal) => api.get<DocumentTemplate[]>("document/templates/", { signal }).then(r => r.data),
-  get:    (id: number, signal?: AbortSignal) => api.get<DocumentTemplate>(`document/templates/${id}/`, { signal }).then(r => r.data),
+  list: (signal?: AbortSignal) => api.get<DocumentTemplate[]>("document/templates/", { signal }).then(r => r.data),
+  get: (id: number, signal?: AbortSignal) => api.get<DocumentTemplate>(`document/templates/${id}/`, { signal }).then(r => r.data),
   create: (data: Pick<DocumentTemplate, "name" | "description">) =>
     api.post<DocumentTemplate>("document/templates/", data).then(r => r.data),
   update: (id: number, data: Partial<DocumentTemplate>) =>
@@ -212,11 +212,11 @@ export const templateApi = {
 // ── Template Routing ──────────────────────────────────────────────────────────
 
 export const templateRoutingApi = {
-  list:    (templateId: number, signal?: AbortSignal) =>
+  list: (templateId: number, signal?: AbortSignal) =>
     api.get<TemplateRouting[]>(`document/templates/${templateId}/routing/`, { signal }).then(r => r.data),
-  add:     (templateId: number, data: Omit<TemplateRouting, 'id' | 'template'>) =>
+  add: (templateId: number, data: Omit<TemplateRouting, 'id' | 'template'>) =>
     api.post<TemplateRouting>(`document/templates/${templateId}/routing/`, data).then(r => r.data),
-  remove:  (templateId: number, stepId: number) =>
+  remove: (templateId: number, stepId: number) =>
     api.delete(`document/templates/${templateId}/routing/${stepId}/`),
   reorder: (templateId: number, stepId: number, newOrder: number) =>
     api.patch<TemplateRouting>(`document/templates/${templateId}/routing/${stepId}/`, { order: newOrder }).then(r => r.data),
@@ -225,18 +225,18 @@ export const templateRoutingApi = {
 // ── Documents ─────────────────────────────────────────────────────────────────
 
 export const documentApi = {
-  list:       (signal?: AbortSignal) => api.get<Document[]>("document/all/", 
-    
-    
-    
-     
-     
-     
-    
-    
+  list: (signal?: AbortSignal) => api.get<Document[]>("document/all/",
+
+
+
+
+
+
+
+
     { signal }).then(r => r.data),
-  myDocs:     (signal?: AbortSignal) => api.get<Document[]>("document/by_office/", { signal }).then(r => r.data),
-  get:        (id: number, signal?: AbortSignal) => api.get<Document>(`document/${id}`, { signal }).then(r => r.data),
+  myDocs: (signal?: AbortSignal) => api.get<Document[]>("document/by_office/", { signal }).then(r => r.data),
+  get: (id: number, signal?: AbortSignal) => api.get<Document>(`document/${id}`, { signal }).then(r => r.data),
   getByTrack: (tracknumber: string, signal?: AbortSignal) =>
     api.get<Document>(`document/tracknumber/${tracknumber}`, { signal }).then(r => r.data),
 
@@ -308,6 +308,32 @@ export const documentApi = {
 export const signatoryApi = {
   update: (id: number, payload: { status: "signed" | "rejected" | "viewed"; remarks?: string }) =>
     api.patch<DocumentSignatory>(`document/signatory/${id}/`, payload).then(r => r.data),
+};
+
+// ── Suggestions ───────────────────────────────────────────────────────────────
+
+export interface Suggestion {
+  id: number;
+  user: number;
+  user_name: string;
+  user_email: string;
+  text: string;
+  image: string | null;
+  status: "Pending" | "In Progress" | "Implemented" | "Rejected";
+  admin_comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const suggestionApi = {
+  list: (signal?: AbortSignal) => api.get<Suggestion[]>("suggestions/", { signal }).then(r => r.data),
+  create: (formData: FormData) =>
+    api.post<Suggestion>("suggestions/", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    }).then(r => r.data),
+  update: (id: number, payload: Partial<Suggestion>) =>
+    api.patch<Suggestion>(`suggestions/${id}/`, payload).then(r => r.data),
+  delete: (id: number) => api.delete(`suggestions/${id}/`),
 };
 
 export default api;

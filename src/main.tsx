@@ -34,6 +34,7 @@ const AdminSettings   = lazy(() => import("./screens/Admin/Setting.tsx"));
 const AdminProfile    = lazy(() => import("./screens/Admin/Profile.tsx"));
 const AdminTemplates  = lazy(() => import("./screens/Admin/TemplatesPage.tsx"));
 const AdminOffices    = lazy(() => import("./screens/Admin/OfficesPage.tsx"));
+const AdminSuggestions = lazy(() => import("./screens/Admin/AdminSuggestions.tsx"));
 
 // ── User panel pages ──────────────────────────────────────────────────────
 const AdminShell      = lazy(() => import("./screens/Admin/AdminShell.tsx"));
@@ -43,6 +44,7 @@ const CreateDocument     = lazy(() => import("./screens/User/CreateDocument.tsx"
 const SignDocument       = lazy(() => import("./screens/User/SignDocument.tsx"));
 const SignatureSettings  = lazy(() => import("./screens/User/SignatureSettings.tsx"));
 const UserProfile        = lazy(() => import("./screens/User/UserProfile.tsx"));
+const Suggestions        = lazy(() => import("./screens/User/Suggestions.tsx"));
 
 // Legacy route kept for old links
 const LegacyDashboard = lazy(() => import("./screens/Dashboard.tsx"));
@@ -94,6 +96,7 @@ const router = createBrowserRouter([
       { path: "templates", element: <Suspense fallback={<Loader />}><AdminTemplates /></Suspense> },
       { path: "offices",   element: <Suspense fallback={<Loader />}><AdminOffices /></Suspense> },
       { path: "settings",  element: <Suspense fallback={<Loader />}><AdminSettings /></Suspense> },
+      { path: "suggestions", element: <Suspense fallback={<Loader />}><AdminSuggestions /></Suspense> },
       { path: "profile",   element: <Suspense fallback={<Loader />}><AdminProfile /></Suspense> },
     ],
   },
@@ -108,6 +111,7 @@ const router = createBrowserRouter([
       { path: "create",    element: <Suspense fallback={<Loader />}><CreateDocument /></Suspense> },
       { path: "settings",  element: <Suspense fallback={<Loader />}><SignatureSettings /></Suspense> },
       { path: "profile",   element: <Suspense fallback={<Loader />}><UserProfile /></Suspense> },
+      { path: "suggestions", element: <Suspense fallback={<Loader />}><Suggestions /></Suspense> },
 
     ],
   },
