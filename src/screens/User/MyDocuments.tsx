@@ -198,7 +198,7 @@ const MyDocuments = () => {
   const [docs, setDocs] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<string>("Incomplete");
+  const [filter, setFilter] = useState<string>("Incomplete/For Signing");
   const [typeFilter, setTypeFilter] = useState<string>("All");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
@@ -909,7 +909,7 @@ const MyDocuments = () => {
     setSelectedTracks([]);
   };
 
-  const statuses = ["Incomplete", "For Signing", "Signed", "All", "Archived", "Completed", "For Sending", "Rejected", "Viewed", "Viewing"];
+  const statuses = ["Incomplete/For Signing", "Signed", "All", "Archived", "Completed", "For Sending", "Rejected", "Viewed", "Viewing"];
   const docTypes = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
   const officeOptions = Array.from(
     new Map(docs.filter(d => d.office != null && d.office_name).map(d => [String(d.office), d.office_name as string])).entries()
@@ -982,6 +982,8 @@ const MyDocuments = () => {
       matchFilter = true;
     } else if (filter === "Archived") {
       matchFilter = isArchived;
+    } else if (filter === "Incomplete/For Signing") {
+      matchFilter = displayStatus === "Incomplete" || displayStatus === "For Signing";
     } else {
       matchFilter = displayStatus === filter;
     }
