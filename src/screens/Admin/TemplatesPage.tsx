@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Search, Plus, Pencil, Trash2, X, CheckCircle2,
-  GitBranch, ChevronDown, Link2, Link2Off, GripVertical,
+  GitBranch, Link2, Link2Off, GripVertical,
 } from "lucide-react";
 import AdminLayout from "./AdminLayout";
 import {
@@ -159,9 +159,12 @@ const RoutingModal = ({
   const [offices, setOffices]         = useState<Office[]>([]);
   const [allUsers, setAllUsers]       = useState<SignatoryUser[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(true);
-  const [addOffice, setAddOffice]     = useState<string>("");
-  const [addUser, setAddUser]         = useState<string>("");
-  const [addRole, setAddRole]         = useState<"signer" | "viewer">("signer");
+  const [pickerMode, setPickerMode]     = useState<"project" | "search">("project");
+  const [addProject, setAddProject]     = useState<string>("");
+  const [projectSearch, setProjectSearch] = useState<string>("");
+  const [addSearch, setAddSearch]       = useState<string>("");
+  const [addPage, setAddPage]           = useState(0);
+  const [addFilesToSign, setAddFilesToSign] = useState<string>("all");
   const [adding, setAdding]           = useState(false);
   const [saving, setSaving]           = useState(false);
 
@@ -181,29 +184,45 @@ const RoutingModal = ({
     return () => ctrl.abort();
   }, []);
 
-  const usersForOffice = addOffice
-    ? allUsers.filter(u => u.office_id === Number(addOffice) && !steps.some(s => s.user_id === u.id))
-    : [];
+  const filteredUsers = allUsers.filter(u => {
+    if (steps.some(s => s.user_id === u.id)) return false;
+    if (pickerMode === "project") {
+      if (!addProject) return false;
+      const selectedId = Number(addProject);
+      return u.project_ids?.includes(selectedId) || u.office_id === selectedId;
+    }
+    const q = addSearch.toLowerCase();
+    if (!q) return true;
+    return (
+      `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
+      u.position.toLowerCase().includes(q) ||
+      (u.office_name || "").toLowerCase().includes(q)
+    );
+  });
 
-  const handleAdd = async () => {
-    if (!addUser || !addOffice) return;
-    const user   = allUsers.find(u => u.id === Number(addUser))!;
-    const office = offices.find(o => o.officeID === Number(addOffice))!;
+  const PAGE_SIZE = 8;
+  const totalPages = Math.ceil(filteredUsers.length / PAGE_SIZE);
+  const pagedUsers = filteredUsers.slice(addPage * PAGE_SIZE, (addPage + 1) * PAGE_SIZE);
+
+  const handleAdd = async (user: SignatoryUser, role: "signer" | "viewer") => {
+    const officeName = user.office_name || "Unknown Office";
+    const officeId = user.office_id || 0;
     setAdding(true);
     try {
       const nextOrder = steps.length === 0 ? 0 : Math.max(...steps.map(s => s.order)) + 1;
       const step = await templateRoutingApi.add(template.id, {
         order:         nextOrder,
-        role:          addRole,
-        office_id:     office.officeID,
-        office_name:   office.name,
+        role:          role,
+        office_id:     officeId,
+        office_name:   officeName,
         user_id:       user.id,
         user_name:     `${user.first_name} ${user.last_name}`,
         user_email:    user.email,
         user_position: user.position,
+        files_to_sign: addFilesToSign,
       });
       setSteps(prev => [...prev, step]);
-      setAddUser("");
+      setAddFilesToSign("all");
     } finally {
       setAdding(false);
     }
@@ -400,13 +419,30 @@ const RoutingModal = ({
                       </p>
                     </div>
 
-                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
-                      step.role === "viewer"
-                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                        : "bg-primary/10 text-primary"
-                    }`}>
-                      {step.role === "viewer" ? "Viewer" : "Signer"}
-                    </span>
+                    <div className="flex flex-col gap-1 items-end shrink-0">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full w-fit ${
+                        step.role === "viewer"
+                          ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                          : "bg-primary/10 text-primary"
+                      }`}>
+                        {step.role === "viewer" ? "Viewer" : "Signer"}
+                      </span>
+                      <input
+                        type="text"
+                        placeholder="Files (e.g. all or 1,2)"
+                        value={step.files_to_sign || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSteps(prev => prev.map(s => s.id === step.id ? { ...s, files_to_sign: val } : s));
+                        }}
+                        onBlur={async (e) => {
+                          const finalVal = e.target.value || "all";
+                          setSteps(prev => prev.map(s => s.id === step.id ? { ...s, files_to_sign: finalVal } : s));
+                          await templateRoutingApi.update(template.id, step.id, { files_to_sign: finalVal });
+                        }}
+                        className="w-24 rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      />
+                    </div>
 
                     <button
                       onClick={() => handleRemove(step)}
@@ -422,72 +458,188 @@ const RoutingModal = ({
         </div>
 
         {/* Add step form */}
-        <div className="px-6 pb-5 pt-3 border-t border-border shrink-0">
+        <div className="px-6 pb-5 pt-3 border-t border-border shrink-0 overflow-y-auto max-h-[50vh]">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Add a Step</p>
           {loadingMeta ? (
             <p className="text-xs text-muted-foreground">Loading offices &amp; users...</p>
           ) : (
             <div className="flex flex-col gap-2">
-              <div className="relative">
-                <select
-                  value={addOffice}
-                  onChange={e => { setAddOffice(e.target.value); setAddUser(""); }}
-                  className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition">
-                  <option value="">Select office</option>
-                  {offices.map(o => (
-                    <option key={o.officeID} value={o.officeID}>{o.name}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-              </div>
-              <div className="relative">
-                <select
-                  value={addUser}
-                  onChange={e => setAddUser(e.target.value)}
-                  disabled={!addOffice}
-                  className="w-full appearance-none rounded-lg border border-border bg-background px-4 py-2.5 pr-9 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition disabled:opacity-50">
-                  <option value="">Select signatory</option>
-                  {usersForOffice.map(u => (
-                    <option key={u.id} value={u.id}>
-                      {u.first_name} {u.last_name}{u.position ? ` (${u.position})` : ""}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              {/* Files to Sign */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-foreground flex items-center gap-2">
+                  Files to assign to next signatory
+                  <span className="text-[10px] text-muted-foreground font-normal normal-case">(default: all)</span>
+                </label>
+                <input
+                  value={addFilesToSign} onChange={e => setAddFilesToSign(e.target.value)}
+                  placeholder="e.g. all or 1,2"
+                  className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                />
               </div>
 
-              {/* Role toggle */}
-              <div className="flex rounded-lg border border-border overflow-hidden text-sm">
-                <button
-                  type="button"
-                  onClick={() => setAddRole("signer")}
-                  className={`flex-1 py-2 font-medium transition ${
-                    addRole === "signer"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-background text-muted-foreground hover:bg-accent"
-                  }`}
-                >
-                  Signer
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAddRole("viewer")}
-                  className={`flex-1 py-2 font-medium transition ${
-                    addRole === "viewer"
-                      ? "bg-amber-500 text-white"
-                      : "bg-background text-muted-foreground hover:bg-accent"
-                  }`}
-                >
-                  Viewer
-                </button>
-              </div>
+              {/* Signatory picker — dual mode */}
+              <div className="border border-border rounded-xl bg-background/50 mt-1">
+                {/* Mode tabs */}
+                <div className="flex border-b border-border rounded-t-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => { setPickerMode("project"); setAddPage(0); }}
+                    className={`flex-1 py-2 text-xs font-semibold transition ${
+                      pickerMode === "project"
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-accent"
+                    }`}
+                  >
+                    Browse by Office/Project
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPickerMode("search"); setAddPage(0); }}
+                    className={`flex-1 py-2 text-xs font-semibold transition ${
+                      pickerMode === "search"
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-accent"
+                    }`}
+                  >
+                    Search by Name
+                  </button>
+                </div>
 
-              <button
-                onClick={handleAdd}
-                disabled={!addUser || !addOffice || adding}
-                className="w-full py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition disabled:opacity-50">
-                {adding ? "Adding..." : `+ Add Step ${new Set(steps.map(s => s.order)).size + 1}`}
-              </button>
+                <div className="p-4 flex flex-col gap-3">
+                  {/* Filter control */}
+                  {pickerMode === "project" ? (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="Search office/project..."
+                        value={projectSearch}
+                        onChange={e => {
+                          setProjectSearch(e.target.value);
+                          setAddProject("");
+                          setAddPage(0);
+                        }}
+                        className="w-full rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                      />
+
+                      {/* Office/Project list */}
+                      {!addProject && (
+                        <div className="border border-border rounded-lg overflow-hidden max-h-[160px] overflow-y-auto">
+                          {(() => {
+                            const filtered = offices.filter(o =>
+                              !projectSearch || o.name.toLowerCase().includes(projectSearch.toLowerCase())
+                            );
+                            return filtered.length === 0 ? (
+                              <p className="px-4 py-3 text-sm text-muted-foreground">No offices/projects match</p>
+                            ) : filtered.map(o => (
+                              <button
+                                key={o.officeID}
+                                type="button"
+                                onClick={() => {
+                                  setAddProject(String(o.officeID));
+                                  setProjectSearch(o.name);
+                                  setAddPage(0);
+                                }}
+                                className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-accent text-left border-b border-border last:border-0 transition"
+                              >
+                                <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold uppercase shrink-0">
+                                  {o.name.slice(0, 1)}
+                                </div>
+                                <span className="text-sm text-foreground">{o.name}</span>
+                              </button>
+                            ));
+                          })()}
+                        </div>
+                      )}
+
+                      {/* Clear selection chip */}
+                      {addProject && (
+                        <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+                          <span className="text-xs font-medium text-primary truncate">{projectSearch}</span>
+                          <button
+                            type="button"
+                            onClick={() => { setAddProject(""); setProjectSearch(""); setAddPage(0); }}
+                            className="ml-2 p-0.5 rounded text-muted-foreground hover:text-destructive transition shrink-0"
+                            title="Clear project"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Search by name, position, or office..."
+                      value={addSearch}
+                      onChange={e => { setAddSearch(e.target.value); setAddPage(0); }}
+                      className="w-full rounded-lg border border-border bg-background px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition"
+                    />
+                  )}
+
+                  {/* User list */}
+                  <div className="border border-border rounded-lg overflow-hidden max-h-[200px] overflow-y-auto">
+                    {pickerMode === "project" && !addProject ? (
+                      <p className="px-4 py-3 text-sm text-muted-foreground">Select an office/project above to see its members</p>
+                    ) : filteredUsers.length === 0 ? (
+                      <p className="px-4 py-3 text-sm text-muted-foreground">
+                        {pickerMode === "search" && addSearch
+                          ? "No users match your search"
+                          : "No available users to assign"}
+                      </p>
+                    ) : (
+                      <>
+                        {pagedUsers.map(u => (
+                          <div key={u.id} className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-accent text-left border-b border-border last:border-0 transition">
+                            <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold uppercase shrink-0">
+                              {u.first_name.slice(0, 1)}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-foreground truncate">{u.first_name} {u.last_name}</p>
+                              <p className="text-xs text-muted-foreground truncate">{u.position || u.email}</p>
+                              {u.office_name && (
+                                <p className="text-[11px] text-muted-foreground/80 truncate">
+                                  {u.office_name}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                disabled={adding}
+                                title="Add as Signer"
+                                onClick={() => handleAdd(u, "signer")}
+                                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-primary/10 text-primary hover:bg-primary/20 transition disabled:opacity-50"
+                              >
+                                <Plus className="w-3 h-3" /> Signer
+                              </button>
+                              <button
+                                type="button"
+                                disabled={adding}
+                                title="Add as Viewer"
+                                onClick={() => handleAdd(u, "viewer")}
+                                className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition disabled:opacity-50"
+                              >
+                                <Plus className="w-3 h-3" /> Viewer
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        {totalPages > 1 && (
+                          <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-accent/30">
+                            <span className="text-xs text-muted-foreground">{addPage * PAGE_SIZE + 1}–{Math.min((addPage + 1) * PAGE_SIZE, filteredUsers.length)} of {filteredUsers.length}</span>
+                            <div className="flex gap-1">
+                              <button type="button" onClick={() => setAddPage(p => p - 1)} disabled={addPage === 0}
+                                className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">‹ Prev</button>
+                              <button type="button" onClick={() => setAddPage(p => p + 1)} disabled={addPage >= totalPages - 1}
+                                className="px-2.5 py-1 rounded text-xs border border-border bg-background hover:bg-accent disabled:opacity-40 transition">Next ›</button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>

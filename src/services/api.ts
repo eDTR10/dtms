@@ -66,6 +66,7 @@ export interface TemplateRouting {
   user_name: string;
   user_email: string;
   user_position: string;
+  files_to_sign?: string;
 }
 
 export interface DocumentTemplate {
@@ -90,6 +91,7 @@ export interface DocumentSignatory {
   status: "pending" | "signed" | "rejected" | "viewed";
   signed_at: string | null;
   remarks: string;
+  files_to_sign?: string;
 }
 
 export interface DocumentFile {
@@ -220,6 +222,8 @@ export const templateRoutingApi = {
     api.delete(`document/templates/${templateId}/routing/${stepId}/`),
   reorder: (templateId: number, stepId: number, newOrder: number) =>
     api.patch<TemplateRouting>(`document/templates/${templateId}/routing/${stepId}/`, { order: newOrder }).then(r => r.data),
+  update: (templateId: number, stepId: number, data: Partial<TemplateRouting>) =>
+    api.patch<TemplateRouting>(`document/templates/${templateId}/routing/${stepId}/`, data).then(r => r.data),
 };
 
 // ── Documents ─────────────────────────────────────────────────────────────────
@@ -255,18 +259,19 @@ export const documentApi = {
   /** Route to office + assign signatories */
   send: (id: number, payload: {
     to_office?: number;
-    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number; role?: "signer" | "viewer" }>;
+    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number; role?: "signer" | "viewer"; files_to_sign?: string }>;
   }) => api.post<Document>(`document/${id}/send/`, payload).then(r => r.data),
 
   /** Update routing — add/remove signatories while preserving signed statuses */
   updateRouting: (id: number, payload: {
-    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number; role?: "signer" | "viewer" }>;
+    signatories: Array<{ user_id: number; user_email: string; user_name: string; order: number; role?: "signer" | "viewer"; files_to_sign?: string }>;
   }) => api.patch<Document>(`document/${id}/update_routing/`, payload).then(r => r.data),
 
   /** Upload signed PDF back to server (single-file, legacy) */
-  uploadSigned: (id: number, file: File) => {
+  uploadSigned: (id: number, file: File, is_final: boolean = true) => {
     const fd = new FormData();
     fd.append("file", file);
+    fd.append("is_final", String(is_final));
     return api.patch<Document>(`document/${id}/upload_signed/`, fd, {
       headers: { "Content-Type": "multipart/form-data" },
     }).then(r => r.data);
@@ -277,10 +282,12 @@ export const documentApi = {
    * FormData must contain file_0/file_id_0, file_1/file_id_1, … pairs.
    * Each original file is replaced in-place; total file count stays the same.
    */
-  signFiles: (id: number, formData: FormData) =>
-    api.patch<Document>(`document/${id}/sign_files/`, formData, {
+  signFiles: (id: number, formData: FormData, is_final: boolean = true) => {
+    formData.append("is_final", String(is_final));
+    return api.patch<Document>(`document/${id}/sign_files/`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
-    }).then(r => r.data),
+    }).then(r => r.data);
+  },
 
   /** Upload additional file to document */
   uploadFile: (id: number, formData: FormData) =>

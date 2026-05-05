@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FileText, Users, Building2, LayoutTemplate,
   Clock, Send, CheckCircle2, XCircle,
   TrendingUp, ArrowRight, RefreshCw, Loader2,
-  Activity, AlertTriangle, BarChart3,
+  Activity, AlertTriangle, BarChart3, Zap, Flame, Target,
 } from "lucide-react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+} from "recharts";
 import AdminLayout from "./AdminLayout";
 import { documentApi, userApi, officeApi, templateApi, Document, UserProfile, Office, DocumentTemplate } from "../../services/api";
 
@@ -135,6 +139,46 @@ const Dashboard = () => {
   const recentDocs = [...docs]
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 8);
+
+  // ── new analytics ──────────────────────────────────────────────────────────
+  // Velocity: docs completed in last 7 days
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const completedLast7 = docs.filter(d => d.status === "Completed" && new Date(d.updatedAt).getTime() >= sevenDaysAgo).length;
+  const velocityPerDay = completedLast7 > 0 ? (completedLast7 / 7).toFixed(1) : "0.0";
+
+  // Health score (0-100)
+  const healthScore = useMemo(() => {
+    if (total === 0) return 100;
+    const completionW = completionRate * 0.4;
+    const stalledW = Math.max(0, 100 - stalledDocs * 10) * 0.3;
+    const rejW = Math.max(0, 100 - rejectionRate * 2) * 0.3;
+    return Math.round(completionW + stalledW + rejW);
+  }, [total, completionRate, stalledDocs, rejectionRate]);
+
+  const healthColor = healthScore >= 75 ? "#22c55e" : healthScore >= 50 ? "#eab308" : "#ef4444";
+  const healthLabel = healthScore >= 75 ? "Excellent" : healthScore >= 50 ? "Fair" : "Needs Attention";
+
+  // Weekly heatmap (last 4 weeks, Mon-Sun)
+  const weeklyHeatmap = useMemo(() => {
+    const weeks: number[][] = [];
+    const today = new Date();
+    for (let w = 3; w >= 0; w--) {
+      const week: number[] = [];
+      for (let d = 0; d < 7; d++) {
+        const date = new Date(today);
+        date.setDate(today.getDate() - (w * 7 + (6 - d)));
+        const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        const dayEnd = dayStart + 86400000;
+        week.push(docs.filter(doc => {
+          const t = new Date(doc.datesubmitted).getTime();
+          return t >= dayStart && t < dayEnd;
+        }).length);
+      }
+      weeks.push(week);
+    }
+    return weeks;
+  }, [docs]);
+  const maxHeat = Math.max(1, ...weeklyHeatmap.flat());
 
   const officeDocCount = offices.map(o => ({
     name:  o.name,
@@ -285,7 +329,34 @@ const Dashboard = () => {
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
 
-  const maxRequestorCount = Math.max(1, ...topRequestors.map(requestor => requestor.count));
+
+
+  // ── recharts data ────────────────────────────────────────────────────────────
+  const stackedMonthly = useMemo(() => {
+    return Array.from({ length: 6 }, (_, i) => {
+      const date = new Date(currentYear, currentMonth - (5 - i), 1);
+      const label = fmtShortMonth(date);
+      const inMonth = (d: Document) => {
+        const s = new Date(d.datesubmitted);
+        return s.getMonth() === date.getMonth() && s.getFullYear() === date.getFullYear();
+      };
+      return {
+        month: label,
+        Pending: docs.filter(d => inMonth(d) && d.status === "Pending").length,
+        "For Signing": docs.filter(d => inMonth(d) && d.status === "For Signing").length,
+        Completed: docs.filter(d => inMonth(d) && d.status === "Completed").length,
+        Rejected: docs.filter(d => inMonth(d) && d.status === "Rejected").length,
+      };
+    });
+  }, [docs, currentMonth, currentYear]);
+
+  const radarData = useMemo(() => [
+    { metric: "Completion", value: completionRate, fullMark: 100 },
+    { metric: "Velocity", value: Math.min(100, parseFloat(velocityPerDay) * 20), fullMark: 100 },
+    { metric: "Health", value: healthScore, fullMark: 100 },
+    { metric: "Routing", value: Math.min(100, pct(routedDocs.length, total)), fullMark: 100 },
+    { metric: "Freshness", value: Math.max(0, 100 - avgDocumentAge * 5), fullMark: 100 },
+  ], [completionRate, velocityPerDay, healthScore, routedDocs.length, total, avgDocumentAge]);
 
   if (loading) return (
     <AdminLayout title="Dashboard" subtitle="Loading...">
@@ -390,7 +461,7 @@ const Dashboard = () => {
         )}
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1.45fr)_minmax(320px,0.85fr)] gap-4 mb-6 xl:grid-cols-1">
+      <div className="grid grid-cols-[minmax(0,1.45fr)_minmax(320px,0.85fr)] gap-4 mb-6 lg:grid-cols-1">
         <div className="rounded-[28px] border border-border bg-card p-5 md:p-6 overflow-hidden relative">
           <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-r from-primary/10 via-sky-500/10 to-emerald-500/10 pointer-events-none" />
           <div className="relative flex items-start justify-between gap-4 mb-6 flex-wrap">
@@ -440,7 +511,7 @@ const Dashboard = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-5 lg:grid-cols-1">
+          <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-5 md:grid-cols-1">
             <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
@@ -544,7 +615,7 @@ const Dashboard = () => {
                   )}
                 </svg>
 
-                <div className={`relative z-10 mt-2 grid gap-2 px-2 text-center text-xs text-muted-foreground ${trendWindow === 12 ? "grid-cols-12" : "grid-cols-6"}`}>
+                <div className={`relative z-10 mt-2 grid gap-2 px-2 text-center text-xs text-muted-foreground ${trendWindow === 12 ? "grid-cols-12 sm:grid-cols-6" : "grid-cols-6"}`}>
                   {monthlyTrend.map(item => (
                     <span key={item.fullLabel} title={item.fullLabel}>{item.label}</span>
                   ))}
@@ -664,8 +735,133 @@ const Dashboard = () => {
         </div>
       </div>
 
+      {/* ── Monthly Status Breakdown (below Operations Pulse) ── */}
+      <div className="rounded-2xl border border-border bg-card overflow-hidden mt-6 mb-6 relative">
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-yellow-500 via-blue-500 via-green-500 to-red-500" />
+        <div className="p-5 sm:p-4">
+          <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-primary" /> Monthly Status Breakdown
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Stacked view of document statuses over the last 6 months.</p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {[
+                { label: "For Sending", color: "#eab308" },
+                { label: "For Signing", color: "#3b82f6" },
+                { label: "Completed", color: "#22c55e" },
+                { label: "Rejected", color: "#ef4444" },
+              ].map(s => (
+                <span key={s.label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: s.color }} />
+                  {s.label}
+                </span>
+              ))}
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={320}>
+            <BarChart data={stackedMonthly} margin={{ top: 10, right: 10, left: -15, bottom: 5 }} barCategoryGap="20%">
+              <defs>
+                <linearGradient id="barPending" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#facc15" stopOpacity={0.9} />
+                  <stop offset="100%" stopColor="#eab308" stopOpacity={0.7} />
+                </linearGradient>
+                <linearGradient id="barSigning" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.9} />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.7} />
+                </linearGradient>
+                <linearGradient id="barCompleted" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#4ade80" stopOpacity={0.9} />
+                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0.7} />
+                </linearGradient>
+                <linearGradient id="barRejected" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#f87171" stopOpacity={0.9} />
+                  <stop offset="100%" stopColor="#ef4444" stopOpacity={0.7} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 6" stroke="rgba(148,163,184,0.12)" vertical={false} />
+              <XAxis dataKey="month" tick={{ fill: "#94a3b8", fontSize: 12 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "rgba(15,23,42,0.95)", border: "1px solid rgba(148,163,184,0.25)", borderRadius: 12, color: "#f1f5f9", fontSize: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.3)" }}
+                itemStyle={{ color: "#f1f5f9" }}
+                cursor={{ fill: "rgba(148,163,184,0.06)" }}
+              />
+              <Bar dataKey="Pending" name="For Sending" stackId="a" fill="url(#barPending)" radius={[0,0,0,0]} animationDuration={800} />
+              <Bar dataKey="For Signing" stackId="a" fill="url(#barSigning)" animationDuration={800} animationBegin={100} />
+              <Bar dataKey="Completed" stackId="a" fill="url(#barCompleted)" animationDuration={800} animationBegin={200} />
+              <Bar dataKey="Rejected" stackId="a" fill="url(#barRejected)" radius={[4,4,0,0]} animationDuration={800} animationBegin={300} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
       {/* ── Two-column section ─────────────────────────────────── */}
-      <div className="grid grid-cols-[1fr_300px] gap-4 lg:grid-cols-1">
+      {/* ── Health / Velocity / Heatmap row ──────────────────── */}
+      <div className="grid grid-cols-3 gap-4 mb-6 md:grid-cols-1">
+        {/* Health Gauge */}
+        <div className="bg-card border border-border rounded-xl p-5 flex flex-col items-center">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-4 self-start">
+            <Target className="w-4 h-4 text-primary" /> System Health
+          </div>
+          <div className="relative w-32 h-32">
+            <svg viewBox="0 0 120 120" className="w-full h-full -rotate-90">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="currentColor" className="text-accent" strokeWidth="10" />
+              <circle cx="60" cy="60" r="50" fill="none" stroke={healthColor} strokeWidth="10" strokeLinecap="round" strokeDasharray={`${healthScore * 3.14} 314`} className="transition-all duration-1000" />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-2xl font-bold text-foreground">{healthScore}</span>
+              <span className="text-[10px] text-muted-foreground">{healthLabel}</span>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mt-3 text-center">Based on completion, stalled docs &amp; rejection rates.</p>
+        </div>
+
+        {/* Velocity */}
+        <div className="bg-card border border-border rounded-xl p-5 flex flex-col">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+            <Zap className="w-4 h-4 text-amber-500" /> Processing Velocity
+          </div>
+          <p className="text-4xl font-bold text-foreground">{velocityPerDay}</p>
+          <p className="text-xs text-muted-foreground mt-1">docs completed per day (last 7 days)</p>
+          <div className="mt-auto pt-4 flex items-center gap-3">
+            <div className="flex-1">
+              <p className="text-xs text-muted-foreground">This week</p>
+              <p className="text-lg font-bold text-foreground">{completedLast7}</p>
+            </div>
+            <div className="flex-1">
+              <p className="text-xs text-muted-foreground">Avg signatories</p>
+              <p className="text-lg font-bold text-foreground">{averageSignatories}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Weekly Heatmap */}
+        <div className="bg-card border border-border rounded-xl p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+            <Flame className="w-4 h-4 text-orange-500" /> Submission Heatmap
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">Last 4 weeks · Mon–Sun</p>
+          <div className="flex flex-col gap-1.5">
+            {weeklyHeatmap.map((week, wi) => (
+              <div key={wi} className="flex gap-1.5">
+                {week.map((count, di) => (
+                  <div key={di} title={`${count} doc${count !== 1 ? "s" : ""}`}
+                    className="flex-1 aspect-square rounded-md transition-colors"
+                    style={{ backgroundColor: count === 0 ? "var(--accent)" : `rgba(14,165,233,${Math.max(0.15, count / maxHeat)})` }}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-[10px] text-muted-foreground">Mon</span>
+            <span className="text-[10px] text-muted-foreground">Sun</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[1fr_300px] gap-4 md:grid-cols-1">
 
         {/* Recent Documents */}
         <div className="bg-card border border-border rounded-xl overflow-hidden flex flex-col">
@@ -745,7 +941,27 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 mt-6 xl:grid-cols-1">
+
+      <div className="grid grid-cols-3 gap-4 mt-6 md:grid-cols-1">
+
+        {/* Radar Chart */}
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h3 className="text-sm font-semibold text-foreground mb-1">Performance Radar</h3>
+          <p className="text-xs text-muted-foreground mb-4">Multi-dimensional overview of system performance.</p>
+          <ResponsiveContainer width="100%" height={260}>
+            <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="72%">
+              <PolarGrid stroke="rgba(148,163,184,0.2)" />
+              <PolarAngleAxis dataKey="metric" tick={{ fill: "#94a3b8", fontSize: 11 }} />
+              <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
+              <Radar name="Score" dataKey="value" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.25} strokeWidth={2} animationDuration={800} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "rgba(15,23,42,0.92)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: 10, color: "#f1f5f9", fontSize: 12 }}
+              />
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Queue Aging */}
         <div className="rounded-xl border border-border bg-card p-5">
           <div className="mb-4">
             <h3 className="text-sm font-semibold text-foreground">Queue Aging</h3>
@@ -769,6 +985,7 @@ const Dashboard = () => {
           </div>
         </div>
 
+        {/* Top Templates */}
         <div className="rounded-xl border border-border bg-card p-5">
           <div className="mb-4">
             <h3 className="text-sm font-semibold text-foreground">Top Templates</h3>
@@ -795,33 +1012,34 @@ const Dashboard = () => {
             </div>
           )}
         </div>
+      </div>
 
-        <div className="rounded-xl border border-border bg-card p-5">
-          <div className="mb-4">
-            <h3 className="text-sm font-semibold text-foreground">Top Requestors</h3>
-            <p className="mt-1 text-xs text-muted-foreground">Users generating the highest document volume.</p>
-          </div>
-          {topRequestors.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No requestor data yet.</p>
-          ) : (
-            <div className="space-y-3">
-              {topRequestors.map(requestor => (
-                <div key={requestor.name} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="truncate text-sm text-foreground">{requestor.name}</span>
-                    <span className="text-xs font-mono text-muted-foreground">{requestor.count}</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-accent overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-teal-400 to-sky-500 transition-all"
-                      style={{ width: `${Math.max(10, (requestor.count / maxRequestorCount) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Top Requestors - full width bar chart */}
+      <div className="rounded-xl border border-border bg-card p-5 mt-6">
+        <h3 className="text-sm font-semibold text-foreground mb-1">Top Requestors</h3>
+        <p className="text-xs text-muted-foreground mb-4">Users generating the highest document volume.</p>
+        {topRequestors.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No requestor data yet.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={topRequestors} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" horizontal={false} />
+              <XAxis type="number" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill: "#94a3b8", fontSize: 12 }} axisLine={false} tickLine={false} width={120} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "rgba(15,23,42,0.92)", border: "1px solid rgba(148,163,184,0.3)", borderRadius: 10, color: "#f1f5f9", fontSize: 12 }}
+                cursor={{ fill: "rgba(148,163,184,0.08)" }}
+              />
+              <Bar dataKey="count" name="Documents" fill="url(#requestorGrad)" radius={[0, 6, 6, 0]} barSize={20} animationDuration={800} />
+              <defs>
+                <linearGradient id="requestorGrad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#14b8a6" />
+                  <stop offset="100%" stopColor="#0ea5e9" />
+                </linearGradient>
+              </defs>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </AdminLayout>
   );

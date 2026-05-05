@@ -248,7 +248,7 @@ const MyDocuments = () => {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  interface RoutingSig { user_id: number; user_email: string; user_name: string; order: number; }
+  interface RoutingSig { user_id: number; user_email: string; user_name: string; order: number; files_to_sign?: string; }
   const [routingDoc, setRoutingDoc] = useState<Document | null>(null);
   const [routingSigs, setRoutingSigs] = useState<RoutingSig[]>([]);
   const [routingOffices, setRoutingOffices] = useState<Office[]>([]);
@@ -1335,24 +1335,36 @@ const MyDocuments = () => {
                     if (!doc.files || doc.files.length <= 1) return null;
                     const mySig = doc.signatories?.find(s => s.user_id === user?.id);
                     if (!mySig || mySig.role === "viewer") return null;
+                    const requiredIndices = (() => {
+                      if (!mySig.files_to_sign || mySig.files_to_sign === "all") {
+                        return doc.files.map((_, i) => i);
+                      }
+                      const parts = mySig.files_to_sign.split(",").map(s => parseInt(s.trim()) - 1).filter(n => !isNaN(n) && n >= 0 && n < doc.files.length);
+                      return parts.length > 0 ? parts : doc.files.map((_, i) => i);
+                    })();
+                    
+                    const requiredCount = requiredIndices.length;
+
                     if (mySig.status === "pending") {
                       return (
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
-                          <span className="sm:hidden">{doc.files.length} files — sign all of them</span>
-                          <span className="hidden sm:inline">Sign all {doc.files.length} files</span>
+                          <span className="sm:hidden">{requiredCount} files — sign {requiredCount === doc.files.length ? "all of them" : "assigned files"}</span>
+                          <span className="hidden sm:inline">Sign {requiredCount} files</span>
                         </span>
                       );
                     }
-                    if (mySig.status === "signed" && doc.files.some(f => f.file_type === "original")) {
-                      const unsignedCount = doc.files.filter(f => f.file_type === "original").length;
-                      return (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-orange-500">
-                          <AlertTriangle className="w-3 h-3 shrink-0" />
-                          <span className="sm:hidden">{unsignedCount} file{unsignedCount !== 1 ? "s" : ""} may be unsigned — open to verify</span>
-                          <span className="hidden sm:inline">{unsignedCount} unsigned</span>
-                        </span>
-                      );
+                    if (mySig.status === "signed") {
+                      const unsignedCount = doc.files.filter((f, idx) => requiredIndices.includes(idx) && f.file_type === "original").length;
+                      if (unsignedCount > 0) {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-orange-500">
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                            <span className="sm:hidden">{unsignedCount} file{unsignedCount !== 1 ? "s" : ""} may be unsigned — open to verify</span>
+                            <span className="hidden sm:inline">{unsignedCount} unsigned</span>
+                          </span>
+                        );
+                      }
                     }
                     return null;
                   })()}
@@ -1503,8 +1515,20 @@ const MyDocuments = () => {
                               <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${isParallelWithAbove ? "bg-blue-500 text-white" : "bg-primary text-primary-foreground"}`}>
                                 {stepNum(s.order)}
                               </span>
-                              <p className="text-sm font-medium text-foreground truncate flex-1">{s.user_name}</p>
-                              <p className="text-xs text-muted-foreground truncate hidden sm:block">{s.user_email}</p>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground truncate">{s.user_name}</p>
+                                <p className="text-xs text-muted-foreground truncate hidden sm:block">{s.user_email}</p>
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="Files (e.g. all or 1,2)"
+                                value={s.files_to_sign || "all"}
+                                onChange={(e) => {
+                                  const newVal = e.target.value;
+                                  setRoutingSigs(prev => prev.map((rs, rsIdx) => rsIdx === i ? { ...rs, files_to_sign: newVal } : rs));
+                                }}
+                                className="w-32 rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                              />
                               <button type="button" onClick={() => setRoutingSigs(prev => prev.filter(x => x.user_id !== s.user_id))}
                                 className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
                                 <XIcon className="w-4 h-4" />
@@ -1538,7 +1562,7 @@ const MyDocuments = () => {
                           <>
                             {paged.map(u => (
                               <button key={u.id} type="button"
-                                onClick={() => setRoutingSigs(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: prev.length === 0 ? 0 : Math.max(...prev.map(s => s.order)) + 1 }])}
+                                onClick={() => setRoutingSigs(prev => [...prev, { user_id: u.id, user_email: u.email, user_name: `${u.first_name} ${u.last_name}`, order: prev.length === 0 ? 0 : Math.max(...prev.map(s => s.order)) + 1, files_to_sign: "all" }])}
                                 className="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-accent text-left border-b border-border last:border-0 transition">
                                 <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold uppercase shrink-0">{u.first_name.slice(0, 1)}</div>
                                 <div className="min-w-0 flex-1">

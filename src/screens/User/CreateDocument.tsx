@@ -18,6 +18,7 @@ interface SignatoryEntry {
   user_name: string;
   order: number;
   role: "signer" | "viewer";
+  files_to_sign?: string;
 }
 
 const PAGE_SIZE = 8;
@@ -158,7 +159,10 @@ const CreateDocument = () => {
                   user_id: step.user_id,
                   user_email: step.user_email,
                   user_name: step.user_name,
-                  order: step.order,                  role: step.role ?? "signer",                }))
+                  order: step.order,
+                  role: step.role ?? "signer",
+                  files_to_sign: step.files_to_sign || "all",
+                }))
             )
           );
           setFromTemplate(true);
@@ -185,6 +189,7 @@ const CreateDocument = () => {
         user_name: `${u.first_name} ${u.last_name}`,
         order: prev.length === 0 ? 0 : Math.max(...prev.map(s => s.order)) + 1,
         role,
+        files_to_sign: "all",
       },
     ]);
     setFromTemplate(false);
@@ -606,6 +611,16 @@ const CreateDocument = () => {
                               }`}>
                                 {s.role === "viewer" ? "Viewer" : "Signer"}
                               </span>
+                              <input
+                                type="text"
+                                placeholder="Files (e.g. all or 1,2)"
+                                value={s.files_to_sign || "all"}
+                                onChange={(e) => {
+                                  const newVal = e.target.value;
+                                  setSignatories(prev => prev.map((rs, rsIdx) => rsIdx === i ? { ...rs, files_to_sign: newVal } : rs));
+                                }}
+                                className="w-24 rounded border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                              />
                               <div className="flex items-center gap-1 shrink-0">
                                 <button
                                   type="button"
