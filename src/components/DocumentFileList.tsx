@@ -174,7 +174,7 @@ const DocumentFileList = ({ document, onFilesUpdated, onFileSelect, selectedFile
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 mb-1">
                   <span className={`text-sm font-medium truncate ${isSelected ? "text-primary" : "text-foreground"}`}>
-                    {file.file.split("/").pop()}
+                    {file.file_url.split("/").pop()}
                   </span>
                   <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${getFileTypeColor(file.file_type)}`}>
                     {getFileTypeLabel(file.file_type)}

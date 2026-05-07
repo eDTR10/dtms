@@ -844,7 +844,7 @@ const SignDocument = () => {
       .then(d => {
         setDoc(d);
         const firstFile = d.files && d.files.length > 0 ? d.files[0] : null;
-        const fileToLoad = firstFile?.file || d.file || null;
+        const fileToLoad = firstFile?.file_url || d.file_url || null;
         setSelectedFileUrl(fileToLoad);
         if (firstFile) {
           activeFileIdRef.current = firstFile.id;
@@ -923,9 +923,9 @@ const SignDocument = () => {
     setPlacingMode(false); setHoverPx(null);
     activeFileIdRef.current = newFile.id;
     setActiveDocFile(newFile);
-    setSelectedFileUrl(newFile.file);
+    setSelectedFileUrl(newFile.file_url);
     setPdfVisible(true);
-    loadPdf(newFile.file, { force: true, fileId: newFile.id, page: saved?.sigPage || 1 });
+    loadPdf(newFile.file_url, { force: true, fileId: newFile.id, page: saved?.sigPage || 1 });
   };
 
 
@@ -1067,7 +1067,7 @@ const SignDocument = () => {
             if ((isBatchMode || batchSignFile) && activeDocFile) cfg = fileStampRef.current[activeDocFile.id];
             if (!cfg) throw new Error("No stamp placement found for this file.");
 
-            const res = await fetch(docFile.file, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+            const res = await fetch(docFile.file_url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
             if (!res.ok) throw new Error(`Fetch failed (HTTP ${res.status}).`);
             const pdfBlob = await res.blob();
 
@@ -1173,7 +1173,7 @@ const SignDocument = () => {
           if (freshFile) {
             activeFileIdRef.current = freshFile.id;
             setActiveDocFile(freshFile);
-            setSelectedFileUrl(freshFile.file);
+            setSelectedFileUrl(freshFile.file_url);
           }
         }
       }
@@ -1199,19 +1199,19 @@ const SignDocument = () => {
 
   const handleDownloadFiles = async () => {
     if (!doc) return;
-    const filesToDownload = doc.files?.length ? doc.files : doc.file ? [{ file: doc.file, id: -1 }] : [];
+    const filesToDownload = doc.files?.length ? doc.files : doc.file_url ? [{ file_url: doc.file_url, id: -1 }] : [];
     if (!filesToDownload.length) return;
     try {
       const tok = localStorage.getItem("auth_token");
       for (let i = 0; i < filesToDownload.length; i++) {
         const f = filesToDownload[i];
-        if (!f.file) continue;
-        const res = await fetch(f.file, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
+        if (!f.file_url) continue;
+        const res = await fetch(f.file_url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        const lastPart = f.file.split("/").pop();
+        const lastPart = f.file_url.split("/").pop();
         a.download = lastPart ? lastPart.split("?")[0] : "";
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
@@ -1354,7 +1354,7 @@ const SignDocument = () => {
   const fallbackName = `${user?.first_name ?? ""} ${user?.last_name ?? ""}`.trim();
   const selectedSignatureProfileName = signatureProfiles.find(p => p.id === selectedSignatureId)?.name || "";
   const selectedFileName = (() => {
-    const rawPath = activeDocFile?.file || selectedFileUrl || "";
+    const rawPath = activeDocFile?.file_url || selectedFileUrl || "";
     if (!rawPath) return "";
     const lastSegment = rawPath.split("/").pop() || rawPath;
     const cleanName = lastSegment.split("?")[0];
@@ -1430,7 +1430,7 @@ const SignDocument = () => {
               {canSign && (
                 <button onClick={() => {
                   setDone(false); setPdfVisible(true); setPlacingMode(true); setHoverPx(null);
-                  const urlToLoad = activeDocFile?.file || doc?.file;
+                  const urlToLoad = activeDocFile?.file_url || doc?.file_url;
                   if (urlToLoad) void loadPdf(urlToLoad, { force: true, fileId: activeDocFile?.id ?? null, page: sigPage });
                 }}
                   className="px-5 py-2.5 rounded-lg border border-border text-sm text-foreground hover:bg-accent transition">
@@ -2032,7 +2032,7 @@ const SignDocument = () => {
                   <DocumentFileList
                     document={doc}
                     onFileSelect={(fileUrl) => {
-                      const matched = doc.files?.find(f => f.file === fileUrl);
+                      const matched = doc.files?.find(f => f.file_url === fileUrl);
                       if (matched) switchToFile(matched);
                       else {
                         activeFileIdRef.current = null;
