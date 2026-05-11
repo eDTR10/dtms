@@ -275,12 +275,18 @@ const CreateDocument = () => {
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!form.title || !form.requestor || !form.position) {
-      setError("Please fill in all required fields.");
-      return;
-    }
-    if (files.length === 0) {
-      setError("Please attach at least one PDF file.");
+    const missingFields = [];
+    if (!form.title) missingFields.push("Title");
+    if (!form.requestor) missingFields.push("Requestor Name");
+    if (!form.position) missingFields.push("Position");
+    if (!form.message) missingFields.push("Message/Body");
+    if (files.length === 0) missingFields.push("File Attachment");
+
+    if (missingFields.length > 0) {
+      const formattedFields = missingFields.length > 1
+        ? `${missingFields.slice(0, -1).join(", ")} and ${missingFields.slice(-1)}`
+        : missingFields[0];
+      setError(`Please provide a "${formattedFields}" for the document.`);
       return;
     }
     setLoading(true);
@@ -432,7 +438,7 @@ const CreateDocument = () => {
                 <div className="flex flex-col gap-1.5">
                   <label className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     <MessageSquare className="w-3.5 h-3.5 text-muted-foreground" />
-                    Message / Body
+                    Message / Body <span className="text-destructive">*</span>
                   </label>
                   <textarea name="message" value={form.message} onChange={handleChange} rows={5}
                     placeholder="Enter the document body or message..."
@@ -458,7 +464,9 @@ const CreateDocument = () => {
                             onDrop={handleFileDragEnd}
                             style={{ cursor: 'move' }}
                           >
-                            <FileText className="w-4 h-4 text-primary shrink-0" />
+                            <div className="w-5 h-5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </div>
                             <span className="text-sm text-foreground truncate flex-1">{f.name}</span>
                             <div className="flex items-center gap-1">
                               <button

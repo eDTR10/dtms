@@ -1342,7 +1342,7 @@ const MyDocuments = () => {
                       const parts = mySig.files_to_sign.split(",").map(s => parseInt(s.trim()) - 1).filter(n => !isNaN(n) && n >= 0 && n < doc.files.length);
                       return parts.length > 0 ? parts : doc.files.map((_, i) => i);
                     })();
-                    
+
                     const requiredCount = requiredIndices.length;
 
                     if (mySig.status === "pending") {
