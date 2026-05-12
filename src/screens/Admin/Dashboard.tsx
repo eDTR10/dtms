@@ -33,18 +33,33 @@ const daysSince = (dateString: string) => {
   return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
 };
 
+/** Derive effective status from signatory data (excludes viewers) */
+const getEffectiveStatus = (doc: Document): string => {
+  const sigs = doc.signatories ?? [];
+  const signers = sigs.filter(s => s.role !== "viewer");
+  const total = signers.length;
+  const signed = signers.filter(s => s.status === "signed").length;
+  const rejected = signers.filter(s => s.status === "rejected").length;
+
+  if (doc.status === "Pending") return "Pending";
+  if (rejected > 0) return "Rejected";
+  if (total > 0 && signed === total) return "Completed";
+  if (doc.status === "For Signing") return "For Signing";
+  return doc.status;
+};
+
 const STATUS_COLOR: Record<string, string> = {
-  Pending:       "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+  Pending: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
   "For Signing": "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-  Completed:     "bg-green-500/10 text-green-600 dark:text-green-400",
-  Rejected:      "bg-destructive/10 text-destructive",
+  Completed: "bg-green-500/10 text-green-600 dark:text-green-400",
+  Rejected: "bg-destructive/10 text-destructive",
 };
 
 const STATUS_BAR: Record<string, string> = {
-  Pending:       "bg-yellow-500",
+  Pending: "bg-yellow-500",
   "For Signing": "bg-blue-500",
-  Completed:     "bg-green-500",
-  Rejected:      "bg-destructive",
+  Completed: "bg-green-500",
+  Rejected: "bg-destructive",
 };
 
 const TREND_METRICS = ["All", "Pending", "For Signing", "Completed", "Rejected"] as const;
@@ -53,11 +68,11 @@ type TrendMetric = (typeof TREND_METRICS)[number];
 const Dashboard = () => {
   const navigate = useNavigate();
 
-  const [docs,       setDocs]       = useState<Document[]>([]);
-  const [users,      setUsers]      = useState<UserProfile[]>([]);
-  const [offices,    setOffices]    = useState<Office[]>([]);
-  const [templates,  setTemplates]  = useState<DocumentTemplate[]>([]);
-  const [loading,    setLoading]    = useState(true);
+  const [docs, setDocs] = useState<Document[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [offices, setOffices] = useState<Office[]>([]);
+  const [templates, setTemplates] = useState<DocumentTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [trendWindow, setTrendWindow] = useState<6 | 12>(6);
   const [trendMetric, setTrendMetric] = useState<TrendMetric>("All");
@@ -95,11 +110,11 @@ const Dashboard = () => {
   }, []);
 
   // ── derived stats ──────────────────────────────────────────────────────────
-  const total       = docs.length;
-  const pending     = docs.filter(d => d.status === "Pending").length;
-  const forSigning  = docs.filter(d => d.status === "For Signing").length;
-  const completed   = docs.filter(d => d.status === "Completed").length;
-  const rejected    = docs.filter(d => d.status === "Rejected").length;
+  const total = docs.length;
+  const pending = docs.filter(d => getEffectiveStatus(d) === "Pending").length;
+  const forSigning = docs.filter(d => getEffectiveStatus(d) === "For Signing").length;
+  const completed = docs.filter(d => getEffectiveStatus(d) === "Completed").length;
+  const rejected = docs.filter(d => getEffectiveStatus(d) === "Rejected").length;
   const activeUsers = users.filter(u => u.is_active).length;
 
   const statuses = ["Pending", "For Signing", "Completed", "Rejected"] as const;
@@ -124,16 +139,16 @@ const Dashboard = () => {
     : "0.0";
   const averageWorkflowProgress = routedDocs.length > 0
     ? Math.round(
-        routedDocs.reduce((sum, doc) => sum + (doc.signed_count / doc.total_signatories) * 100, 0) / routedDocs.length,
-      )
+      routedDocs.reduce((sum, doc) => sum + (doc.signed_count / doc.total_signatories) * 100, 0) / routedDocs.length,
+    )
     : 0;
 
-  const actionableDocs = docs.filter(doc => doc.status === "Pending" || doc.status === "For Signing");
+  const actionableDocs = docs.filter(doc => { const eff = getEffectiveStatus(doc); return eff === "Pending" || eff === "For Signing"; });
   const stalledDocs = actionableDocs.filter(doc => daysSince(doc.updatedAt || doc.datesubmitted) >= 7).length;
   const avgDocumentAge = actionableDocs.length > 0
     ? Math.round(
-        actionableDocs.reduce((sum, doc) => sum + daysSince(doc.updatedAt || doc.datesubmitted), 0) / actionableDocs.length,
-      )
+      actionableDocs.reduce((sum, doc) => sum + daysSince(doc.updatedAt || doc.datesubmitted), 0) / actionableDocs.length,
+    )
     : 0;
 
   const recentDocs = [...docs]
@@ -143,7 +158,7 @@ const Dashboard = () => {
   // ── new analytics ──────────────────────────────────────────────────────────
   // Velocity: docs completed in last 7 days
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const completedLast7 = docs.filter(d => d.status === "Completed" && new Date(d.updatedAt).getTime() >= sevenDaysAgo).length;
+  const completedLast7 = docs.filter(d => getEffectiveStatus(d) === "Completed" && new Date(d.updatedAt).getTime() >= sevenDaysAgo).length;
   const velocityPerDay = completedLast7 > 0 ? (completedLast7 / 7).toFixed(1) : "0.0";
 
   // Health score (0-100)
@@ -181,7 +196,7 @@ const Dashboard = () => {
   const maxHeat = Math.max(1, ...weeklyHeatmap.flat());
 
   const officeDocCount = offices.map(o => ({
-    name:  o.name,
+    name: o.name,
     count: docs.filter(d => d.to === o.officeID).length,
   })).sort((a, b) => b.count - a.count).slice(0, 5);
 
@@ -195,7 +210,7 @@ const Dashboard = () => {
       if (!inMonth) return false;
 
       if (trendMetric === "All") return true;
-      return doc.status === trendMetric;
+      return getEffectiveStatus(doc) === trendMetric;
     }).length;
 
     return {
@@ -240,11 +255,11 @@ const Dashboard = () => {
 
   const areaPath = chartPoints.length > 0
     ? [
-        `M ${chartPoints[0].x} ${chartHeight - chartPaddingBottom}`,
-        ...chartPoints.map(point => `L ${point.x} ${point.y}`),
-        `L ${chartPoints[chartPoints.length - 1].x} ${chartHeight - chartPaddingBottom}`,
-        "Z",
-      ].join(" ")
+      `M ${chartPoints[0].x} ${chartHeight - chartPaddingBottom}`,
+      ...chartPoints.map(point => `L ${point.x} ${point.y}`),
+      `L ${chartPoints[chartPoints.length - 1].x} ${chartHeight - chartPaddingBottom}`,
+      "Z",
+    ].join(" ")
     : "";
 
   const statusSegments = statuses
@@ -281,16 +296,16 @@ const Dashboard = () => {
   const donutBackground = statusSegments.length === 0
     ? "conic-gradient(#e5e7eb 0deg 360deg)"
     : (() => {
-        let cursor = 0;
-        const stops = statusSegments.map(segment => {
-          const degrees = (segment.count / total) * 360;
-          const stop = `${segment.color} ${cursor}deg ${cursor + degrees}deg`;
-          cursor += degrees;
-          return stop;
-        });
+      let cursor = 0;
+      const stops = statusSegments.map(segment => {
+        const degrees = (segment.count / total) * 360;
+        const stop = `${segment.color} ${cursor}deg ${cursor + degrees}deg`;
+        cursor += degrees;
+        return stop;
+      });
 
-        return `conic-gradient(${stops.join(", ")})`;
-      })();
+      return `conic-gradient(${stops.join(", ")})`;
+    })();
 
   const ageBuckets = [
     { label: "0-3d", min: 0, max: 3 },
@@ -342,10 +357,10 @@ const Dashboard = () => {
       };
       return {
         month: label,
-        Pending: docs.filter(d => inMonth(d) && d.status === "Pending").length,
-        "For Signing": docs.filter(d => inMonth(d) && d.status === "For Signing").length,
-        Completed: docs.filter(d => inMonth(d) && d.status === "Completed").length,
-        Rejected: docs.filter(d => inMonth(d) && d.status === "Rejected").length,
+        Pending: docs.filter(d => inMonth(d) && getEffectiveStatus(d) === "Pending").length,
+        "For Signing": docs.filter(d => inMonth(d) && getEffectiveStatus(d) === "For Signing").length,
+        Completed: docs.filter(d => inMonth(d) && getEffectiveStatus(d) === "Completed").length,
+        Rejected: docs.filter(d => inMonth(d) && getEffectiveStatus(d) === "Rejected").length,
       };
     });
   }, [docs, currentMonth, currentYear]);
@@ -396,10 +411,10 @@ const Dashboard = () => {
       {/* ── Top stat cards ─────────────────────────────────────── */}
       <div className="grid grid-cols-4 gap-4 mb-6 lg:grid-cols-2 sm:grid-cols-2">
         {[
-          { label: "Total Documents", value: total,           icon: <FileText className="w-5 h-5" />,      color: "text-primary",     bg: "bg-primary/10" },
-          { label: "Active Users",    value: activeUsers,     icon: <Users className="w-5 h-5" />,         color: "text-teal-500",    bg: "bg-teal-500/10" },
-          { label: "Offices",         value: offices.length,  icon: <Building2 className="w-5 h-5" />,     color: "text-violet-500",  bg: "bg-violet-500/10" },
-          { label: "Templates",       value: templates.length,icon: <LayoutTemplate className="w-5 h-5" />,color: "text-orange-500",  bg: "bg-orange-500/10" },
+          { label: "Total Documents", value: total, icon: <FileText className="w-5 h-5" />, color: "text-primary", bg: "bg-primary/10" },
+          { label: "Active Users", value: activeUsers, icon: <Users className="w-5 h-5" />, color: "text-teal-500", bg: "bg-teal-500/10" },
+          { label: "Offices", value: offices.length, icon: <Building2 className="w-5 h-5" />, color: "text-violet-500", bg: "bg-violet-500/10" },
+          { label: "Templates", value: templates.length, icon: <LayoutTemplate className="w-5 h-5" />, color: "text-orange-500", bg: "bg-orange-500/10" },
         ].map(s => (
           <div key={s.label} className="bg-card border border-border rounded-xl p-5 flex flex-col gap-3 hover:border-primary/30 transition-colors">
             <div className="flex items-center justify-between">
@@ -418,10 +433,10 @@ const Dashboard = () => {
         </h3>
         <div className="grid grid-cols-4 gap-4 mb-5 sm:grid-cols-2">
           {[
-            { label: "For Sending", value: pending,    icon: <Clock className="w-4 h-4" />,        color: "text-yellow-500", bg: "bg-yellow-500/10" },
-            { label: "For Signing", value: forSigning, icon: <Send className="w-4 h-4" />,         color: "text-blue-500",   bg: "bg-blue-500/10" },
-            { label: "Completed",   value: completed,  icon: <CheckCircle2 className="w-4 h-4" />, color: "text-green-500",  bg: "bg-green-500/10" },
-            { label: "Rejected",    value: rejected,   icon: <XCircle className="w-4 h-4" />,      color: "text-destructive",bg: "bg-destructive/10" },
+            { label: "For Sending", value: pending, icon: <Clock className="w-4 h-4" />, color: "text-yellow-500", bg: "bg-yellow-500/10" },
+            { label: "For Signing", value: forSigning, icon: <Send className="w-4 h-4" />, color: "text-blue-500", bg: "bg-blue-500/10" },
+            { label: "Completed", value: completed, icon: <CheckCircle2 className="w-4 h-4" />, color: "text-green-500", bg: "bg-green-500/10" },
+            { label: "Rejected", value: rejected, icon: <XCircle className="w-4 h-4" />, color: "text-destructive", bg: "bg-destructive/10" },
           ].map(s => (
             <div key={s.label} className={`rounded-xl border border-border px-4 py-3 flex items-center gap-3 ${s.bg}`}>
               <span className={s.color}>{s.icon}</span>
@@ -438,7 +453,7 @@ const Dashboard = () => {
             <div className="flex rounded-full overflow-hidden h-3 gap-px">
               {statuses.map(s => {
                 const count = statusCounts[s];
-                const pct   = (count / total) * 100;
+                const pct = (count / total) * 100;
                 return pct > 0 ? (
                   <div key={s} title={`${s}: ${count}`}
                     className={`${STATUS_BAR[s]} transition-all`}
@@ -513,24 +528,41 @@ const Dashboard = () => {
 
           <div className="grid grid-cols-[minmax(0,1fr)_220px] gap-5 md:grid-cols-1">
             <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Submission Volume</p>
-                  <p className="mt-1 text-2xl font-semibold text-foreground">{monthlyTrend.reduce((sum, item) => sum + item.count, 0)} in selected window</p>
+                  <p className="mt-1 text-2xl font-semibold text-foreground">
+                    {monthlyTrend.reduce((sum, item) => sum + item.count, 0)}
+                    <span className="ml-2 text-sm font-normal text-muted-foreground">documents</span>
+                  </p>
                 </div>
-                <div className="text-right">
-                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Peak Month</p>
-                  <p className="text-lg font-semibold text-foreground">{maxMonthlyCount}</p>
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Peak</p>
+                    <p className="text-lg font-bold text-primary">{maxMonthlyCount}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg</p>
+                    <p className="text-lg font-bold text-foreground">{monthlyTrend.length > 0 ? Math.round(monthlyTrend.reduce((s, i) => s + i.count, 0) / monthlyTrend.length) : 0}</p>
+                  </div>
                 </div>
               </div>
 
-              <div className="relative h-[320px] w-full overflow-hidden rounded-2xl bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.05),transparent)] px-2 pt-4 sm:h-[260px]">
+              <div className="relative h-[320px] w-full overflow-hidden rounded-2xl bg-gradient-to-b from-primary/[0.03] to-transparent px-2 pt-4 sm:h-[260px]">
+                {/* Y-axis labels */}
+                <div className="pointer-events-none absolute left-1 top-4 bottom-8 flex flex-col justify-between z-20">
+                  {[maxMonthlyCount, Math.round(maxMonthlyCount * 0.75), Math.round(maxMonthlyCount * 0.5), Math.round(maxMonthlyCount * 0.25), 0].map((val, i) => (
+                    <span key={i} className="text-[9px] font-mono text-muted-foreground/60 leading-none">{val}</span>
+                  ))}
+                </div>
+
+                {/* Grid lines */}
                 <div className="pointer-events-none absolute inset-0">
-                  {[0, 1, 2, 3].map(row => (
+                  {[0, 1, 2, 3, 4].map(row => (
                     <div
                       key={row}
-                      className="absolute left-0 right-0 border-t border-dashed border-border/60"
-                      style={{ top: `${20 + row * 23}%` }}
+                      className="absolute left-8 right-0 border-t border-border/30"
+                      style={{ top: `${12 + row * 19}%` }}
                     />
                   ))}
                 </div>
@@ -538,86 +570,131 @@ const Dashboard = () => {
                 <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="relative z-10 h-full w-full overflow-visible">
                   <defs>
                     <linearGradient id="dashboardAreaFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.38" />
-                      <stop offset="55%" stopColor="#14b8a6" stopOpacity="0.18" />
-                      <stop offset="100%" stopColor="#22c55e" stopOpacity="0.04" />
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity="0.25" />
+                      <stop offset="40%" stopColor="#0ea5e9" stopOpacity="0.15" />
+                      <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.02" />
                     </linearGradient>
                     <linearGradient id="dashboardLineStroke" x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor="#38bdf8" />
+                      <stop offset="0%" stopColor="#818cf8" />
                       <stop offset="50%" stopColor="#0ea5e9" />
-                      <stop offset="100%" stopColor="#10b981" />
+                      <stop offset="100%" stopColor="#06b6d4" />
                     </linearGradient>
+                    <linearGradient id="barFillGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.35" />
+                      <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.06" />
+                    </linearGradient>
+                    <filter id="glow">
+                      <feGaussianBlur stdDeviation="3" result="blur" />
+                      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                    </filter>
                   </defs>
 
+                  {/* Vertical guides */}
                   {chartPoints.map(point => (
                     <line
                       key={`guide-${point.fullLabel}`}
-                      x1={point.x}
-                      y1={chartPaddingTop}
-                      x2={point.x}
-                      y2={chartHeight - chartPaddingBottom}
-                      stroke="rgba(148, 163, 184, 0.18)"
-                      strokeDasharray="3 7"
+                      x1={point.x} y1={chartPaddingTop} x2={point.x} y2={chartHeight - chartPaddingBottom}
+                      stroke="rgba(148, 163, 184, 0.12)" strokeDasharray="2 6"
                     />
                   ))}
 
+                  {/* Bar chart underneath */}
+                  {chartPoints.map((point, i) => {
+                    const barW = Math.max(18, (chartWidth - 80) / chartPoints.length * 0.5);
+                    const barH = (chartHeight - chartPaddingBottom) - point.y;
+                    return (
+                      <rect
+                        key={`bar-${i}`}
+                        x={point.x - barW / 2}
+                        y={point.y}
+                        width={barW}
+                        height={Math.max(0, barH)}
+                        rx={4}
+                        fill="url(#barFillGrad)"
+                        className="transition-all duration-300"
+                      />
+                    );
+                  })}
+
+                  {/* Area fill */}
                   <path d={areaPath} fill="url(#dashboardAreaFill)" />
+
+                  {/* Line */}
                   <path
                     d={linePath}
                     fill="none"
                     stroke="url(#dashboardLineStroke)"
-                    strokeWidth="5"
+                    strokeWidth="3.5"
                     strokeLinecap="round"
                     strokeLinejoin="round"
+                    filter="url(#glow)"
                   />
 
-                  {chartPoints.map((point, pointIndex) => (
-                    <g
-                      key={point.fullLabel}
-                      onMouseEnter={() => setHoveredPointIndex(pointIndex)}
-                      onMouseLeave={() => setHoveredPointIndex(null)}
-                    >
-                      <circle cx={point.x} cy={point.y} r="8" fill="rgba(14, 165, 233, 0.18)" />
-                      <circle cx={point.x} cy={point.y} r="5.5" fill="#0ea5e9" stroke="#ffffff" strokeWidth="2" />
-                      <circle cx={point.x} cy={point.y} r="14" fill="transparent" />
-                      <text x={point.x} y={point.y - 16} textAnchor="middle" className="fill-foreground text-[12px] font-semibold">
-                        {point.count}
-                      </text>
-                    </g>
-                  ))}
+                  {/* Data points */}
+                  {chartPoints.map((point, pointIndex) => {
+                    const isHovered = hoveredPointIndex === pointIndex;
+                    return (
+                      <g
+                        key={point.fullLabel}
+                        onMouseEnter={() => setHoveredPointIndex(pointIndex)}
+                        onMouseLeave={() => setHoveredPointIndex(null)}
+                        className="transition-transform duration-150"
+                      >
+                        {/* Hover highlight column */}
+                        {isHovered && (
+                          <rect
+                            x={point.x - 24} y={chartPaddingTop}
+                            width={48} height={chartHeight - chartPaddingTop - chartPaddingBottom}
+                            fill="rgba(14, 165, 233, 0.04)" rx={8}
+                          />
+                        )}
+                        {/* Outer glow */}
+                        <circle cx={point.x} cy={point.y} r={isHovered ? 14 : 8} fill="rgba(14, 165, 233, 0.15)" className="transition-all duration-200" />
+                        {/* Dot */}
+                        <circle cx={point.x} cy={point.y} r={isHovered ? 7 : 5} fill="#0ea5e9" stroke="#ffffff" strokeWidth="2.5" className="transition-all duration-200" />
+                        {/* Hit area */}
+                        <circle cx={point.x} cy={point.y} r="18" fill="transparent" />
+                        {/* Value label */}
+                        <text x={point.x} y={point.y - (isHovered ? 22 : 16)} textAnchor="middle" className={`fill-foreground font-semibold transition-all ${isHovered ? "text-[14px]" : "text-[11px]"}`}>
+                          {point.count}
+                        </text>
+                      </g>
+                    );
+                  })}
 
+                  {/* Hover tooltip */}
                   {hoveredPoint && (
                     <g>
                       <rect
-                        x={Math.max(8, Math.min(chartWidth - 172, hoveredPoint.x - 86))}
-                        y={Math.max(8, hoveredPoint.y - 64)}
-                        width="172"
-                        height="48"
-                        rx="10"
-                        fill="rgba(15, 23, 42, 0.92)"
-                        stroke="rgba(148, 163, 184, 0.45)"
+                        x={Math.max(8, Math.min(chartWidth - 180, hoveredPoint.x - 90))}
+                        y={Math.max(8, hoveredPoint.y - 72)}
+                        width="180" height="52" rx="12"
+                        fill="rgba(15, 23, 42, 0.95)"
+                        stroke="rgba(99, 102, 241, 0.4)"
+                        strokeWidth="1"
                       />
                       <text
-                        x={Math.max(14, Math.min(chartWidth - 166, hoveredPoint.x - 80))}
-                        y={Math.max(26, hoveredPoint.y - 42)}
-                        className="fill-white text-[11px]"
+                        x={Math.max(18, Math.min(chartWidth - 170, hoveredPoint.x - 80))}
+                        y={Math.max(28, hoveredPoint.y - 50)}
+                        className="fill-slate-300 text-[11px]"
                       >
                         {hoveredPoint.fullLabel}
                       </text>
                       <text
-                        x={Math.max(14, Math.min(chartWidth - 166, hoveredPoint.x - 80))}
-                        y={Math.max(44, hoveredPoint.y - 24)}
-                        className="fill-sky-300 text-[13px] font-semibold"
+                        x={Math.max(18, Math.min(chartWidth - 170, hoveredPoint.x - 80))}
+                        y={Math.max(46, hoveredPoint.y - 32)}
+                        className="fill-sky-300 text-[13px] font-bold"
                       >
-                        {hoveredPoint.count} document{hoveredPoint.count !== 1 ? "s" : ""}
+                        {hoveredPoint.count} document{hoveredPoint.count !== 1 ? "s" : ""} submitted
                       </text>
                     </g>
                   )}
                 </svg>
 
-                <div className={`relative z-10 mt-2 grid gap-2 px-2 text-center text-xs text-muted-foreground ${trendWindow === 12 ? "grid-cols-12 sm:grid-cols-6" : "grid-cols-6"}`}>
+                {/* Month labels */}
+                <div className={`relative z-10 mt-2 grid gap-2 px-2 text-center text-[10px] font-medium text-muted-foreground ${trendWindow === 12 ? "grid-cols-12 sm:grid-cols-6" : "grid-cols-6"}`}>
                   {monthlyTrend.map(item => (
-                    <span key={item.fullLabel} title={item.fullLabel}>{item.label}</span>
+                    <span key={item.fullLabel} title={item.fullLabel} className="uppercase tracking-wider">{item.label}</span>
                   ))}
                 </div>
               </div>
@@ -737,7 +814,7 @@ const Dashboard = () => {
 
       {/* ── Monthly Status Breakdown (below Operations Pulse) ── */}
       <div className="rounded-2xl border border-border bg-card overflow-hidden mt-6 mb-6 relative">
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-yellow-500 via-blue-500 via-green-500 to-red-500" />
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-yellow-500 via-blue-500  to-red-500" />
         <div className="p-5 sm:p-4">
           <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
             <div>
@@ -788,10 +865,10 @@ const Dashboard = () => {
                 itemStyle={{ color: "#f1f5f9" }}
                 cursor={{ fill: "rgba(148,163,184,0.06)" }}
               />
-              <Bar dataKey="Pending" name="For Sending" stackId="a" fill="url(#barPending)" radius={[0,0,0,0]} animationDuration={800} />
+              <Bar dataKey="Pending" name="For Sending" stackId="a" fill="url(#barPending)" radius={[0, 0, 0, 0]} animationDuration={800} />
               <Bar dataKey="For Signing" stackId="a" fill="url(#barSigning)" animationDuration={800} animationBegin={100} />
               <Bar dataKey="Completed" stackId="a" fill="url(#barCompleted)" animationDuration={800} animationBegin={200} />
-              <Bar dataKey="Rejected" stackId="a" fill="url(#barRejected)" radius={[4,4,0,0]} animationDuration={800} animationBegin={300} />
+              <Bar dataKey="Rejected" stackId="a" fill="url(#barRejected)" radius={[4, 4, 0, 0]} animationDuration={800} animationBegin={300} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -818,20 +895,82 @@ const Dashboard = () => {
         </div>
 
         {/* Velocity */}
-        <div className="bg-card border border-border rounded-xl p-5 flex flex-col">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
-            <Zap className="w-4 h-4 text-amber-500" /> Processing Velocity
+        <div className="bg-card border border-border rounded-xl p-5 flex flex-col relative overflow-hidden">
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-red-500" />
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <Zap className="w-4 h-4 text-amber-500" /> Processing Velocity
+            </div>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Last 7 days</span>
           </div>
-          <p className="text-4xl font-bold text-foreground">{velocityPerDay}</p>
-          <p className="text-xs text-muted-foreground mt-1">docs completed per day (last 7 days)</p>
-          <div className="mt-auto pt-4 flex items-center gap-3">
-            <div className="flex-1">
-              <p className="text-xs text-muted-foreground">This week</p>
+
+          {/* Big velocity number */}
+          <div className="flex items-end gap-2 mb-1">
+            <p className="text-5xl font-black text-foreground leading-none">{velocityPerDay}</p>
+            <p className="text-sm text-muted-foreground pb-1">docs/day</p>
+          </div>
+
+          {/* Sparkline: daily completions over last 7 days */}
+          {(() => {
+            const dailyCounts: number[] = [];
+            for (let i = 6; i >= 0; i--) {
+              const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0); dayStart.setDate(dayStart.getDate() - i);
+              const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+              dailyCounts.push(docs.filter(d => getEffectiveStatus(d) === "Completed" && new Date(d.updatedAt).getTime() >= dayStart.getTime() && new Date(d.updatedAt).getTime() < dayEnd.getTime()).length);
+            }
+            const maxD = Math.max(1, ...dailyCounts);
+            const sparkW = 200, sparkH = 60, padX = 8, padY = 6;
+            const pts = dailyCounts.map((c, i) => ({
+              x: padX + (i / 6) * (sparkW - padX * 2),
+              y: padY + (1 - c / maxD) * (sparkH - padY * 2),
+              v: c,
+            }));
+            const sparkLine = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+            const sparkArea = pts.length > 0 ? `M ${pts[0].x} ${sparkH} ${pts.map(p => `L ${p.x} ${p.y}`).join(" ")} L ${pts[pts.length - 1].x} ${sparkH} Z` : "";
+            const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+            const today = new Date().getDay();
+            const orderedLabels = Array.from({ length: 7 }, (_, i) => dayLabels[(today - 6 + i + 7) % 7]);
+
+            return (
+              <div className="mt-3 mb-4">
+                <svg viewBox={`0 0 ${sparkW} ${sparkH}`} className="w-full h-16">
+                  <defs>
+                    <linearGradient id="sparkArea" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.3" />
+                      <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.02" />
+                    </linearGradient>
+                  </defs>
+                  <path d={sparkArea} fill="url(#sparkArea)" />
+                  <path d={sparkLine} fill="none" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  {pts.map((p, i) => (
+                    <g key={i}>
+                      <circle cx={p.x} cy={p.y} r="3.5" fill="#f59e0b" stroke="white" strokeWidth="1.5" />
+                      <text x={p.x} y={p.y - 7} textAnchor="middle" className="fill-foreground text-[7px] font-bold">{p.v}</text>
+                    </g>
+                  ))}
+                </svg>
+                <div className="flex justify-between px-1 mt-1">
+                  {orderedLabels.map((d, i) => (
+                    <span key={i} className="text-[8px] text-muted-foreground/60 uppercase">{d}</span>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Stats row */}
+          <div className="mt-auto grid grid-cols-3 gap-2">
+            <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2 text-center">
+              <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Completed</p>
               <p className="text-lg font-bold text-foreground">{completedLast7}</p>
             </div>
-            <div className="flex-1">
-              <p className="text-xs text-muted-foreground">Avg signatories</p>
+            <div className="rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-center">
+              <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Avg Sign.</p>
               <p className="text-lg font-bold text-foreground">{averageSignatories}</p>
+            </div>
+            <div className="rounded-lg bg-green-500/5 border border-green-500/20 px-3 py-2 text-center">
+              <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Rate</p>
+              <p className="text-lg font-bold text-foreground">{completionRate}%</p>
             </div>
           </div>
         </div>
@@ -888,8 +1027,8 @@ const Dashboard = () => {
                   <p className="text-xs text-muted-foreground font-mono">{doc.tracknumber} · {doc.requestor}</p>
                 </div>
                 <div className="flex flex-col items-end gap-1 shrink-0">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_COLOR[doc.status] ?? "bg-muted text-muted-foreground"}`}>
-                    {doc.status === "Pending" ? "For Sending" : doc.status}
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${STATUS_COLOR[getEffectiveStatus(doc)] ?? "bg-muted text-muted-foreground"}`}>
+                    {getEffectiveStatus(doc) === "Pending" ? "For Sending" : getEffectiveStatus(doc)}
                   </span>
                   <span className="text-[10px] text-muted-foreground">{fmtDate(doc.datesubmitted)}</span>
                 </div>
@@ -905,10 +1044,10 @@ const Dashboard = () => {
           <div className="bg-card border border-border rounded-xl p-5 flex flex-col gap-2">
             <h3 className="text-sm font-semibold text-foreground mb-1">Quick Actions</h3>
             {[
-              { label: "Manage Users",     icon: <Users className="w-4 h-4" />,          path: "/dtms/admin/users" },
-              { label: "Manage Offices",   icon: <Building2 className="w-4 h-4" />,      path: "/dtms/admin/offices" },
+              { label: "Manage Users", icon: <Users className="w-4 h-4" />, path: "/dtms/admin/users" },
+              { label: "Manage Offices", icon: <Building2 className="w-4 h-4" />, path: "/dtms/admin/offices" },
               { label: "Manage Templates", icon: <LayoutTemplate className="w-4 h-4" />, path: "/dtms/admin/templates" },
-              { label: "All Documents",    icon: <FileText className="w-4 h-4" />,       path: "/dtms/admin/documents" },
+              { label: "All Documents", icon: <FileText className="w-4 h-4" />, path: "/dtms/admin/documents" },
             ].map(a => (
               <button key={a.label} onClick={() => navigate(a.path)}
                 className="flex items-center gap-3 w-full px-4 py-2.5 rounded-lg border border-border hover:bg-accent hover:border-primary/40 text-sm text-foreground transition-colors">

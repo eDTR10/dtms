@@ -1838,7 +1838,7 @@ const SignDocument = () => {
                                       <span className="text-muted-foreground truncate hidden sm:inline">{s.user_email}</span>
                                       <span className={`ml-auto px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${s.status === "signed" ? "bg-green-500/10 text-green-600" : s.status === "rejected" ? "bg-destructive/10 text-destructive" : s.status === "viewed" ? "bg-amber-500/10 text-amber-600" : "bg-yellow-500/10 text-yellow-600"}`}>{s.status}</span>
                                     </div>
-                                    {s.signed_at && <p className="mt-1 text-muted-foreground pl-7">{s.status === "rejected" ? "Declined" : "Signed"} on {fmtSignedAt(s.signed_at)}</p>}
+                                    {s.signed_at && !(s.role === "viewer" && s.status === "pending") && <p className="mt-1 text-muted-foreground pl-7">{s.status === "rejected" ? "Declined" : s.role === "viewer" ? "Viewed" : "Signed"} on {fmtSignedAt(s.signed_at)}</p>}
                                     {s.remarks && <p className={`mt-1 pl-7 italic text-xs ${s.status === "rejected" ? "text-destructive/80" : "text-muted-foreground"}`}>{s.status === "rejected" ? "Reason" : "Remarks"}: {s.remarks}</p>}
                                   </div>
                                 ))}

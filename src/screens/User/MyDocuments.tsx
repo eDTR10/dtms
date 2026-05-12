@@ -1442,13 +1442,27 @@ const MyDocuments = () => {
                 aria-label="Previous page">
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
-                <button key={n} onClick={() => setPage(n)}
-                  className={`min-w-[2rem] h-8 rounded-md text-xs font-medium border transition-colors ${n === page ? "bg-primary text-primary-foreground border-primary" : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-                    }`}>
-                  {n}
-                </button>
-              ))}
+              {(() => {
+                const getPageNumbers = () => {
+                  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+                  if (page <= 3) return [1, 2, 3, 4, '...', totalPages - 1, totalPages];
+                  if (page >= totalPages - 2) return [1, 2, '...', totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+                  return [1, '...', page - 1, page, page + 1, '...', totalPages];
+                };
+
+                return getPageNumbers().map((n, i) => (
+                  n === '...' ? (
+                    <span key={`ellipsis-${i}`} className="px-2 text-muted-foreground">...</span>
+                  ) : (
+                    <button key={n} onClick={() => setPage(n as number)}
+                      className={`min-w-[2rem] h-8 rounded-md text-xs font-medium border transition-colors ${
+                        n === page
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                      }`}>{n}</button>
+                  )
+                ));
+              })()}
               <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
                 className="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 aria-label="Next page">
