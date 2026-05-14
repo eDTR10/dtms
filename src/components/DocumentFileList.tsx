@@ -89,6 +89,28 @@ const DocumentFileList = ({ document, onFilesUpdated, onFileSelect, selectedFile
     }
   };
 
+  const handleDownload = async (fileUrl: string) => {
+    try {
+      const tok = localStorage.getItem("auth_token");
+      const res = await fetch(fileUrl, {
+        headers: tok ? { Authorization: `Token ${tok}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = globalThis.document.createElement("a");
+      a.href = url;
+      const lastPart = fileUrl.split("/").pop();
+      a.download = lastPart ? lastPart.split("?")[0] : "document.pdf";
+      globalThis.document.body.appendChild(a);
+      a.click();
+      globalThis.document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError(err?.message || "Failed to download file");
+    }
+  };
+
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleString(undefined, {
       year: "numeric", month: "short", day: "numeric",
@@ -186,15 +208,16 @@ const DocumentFileList = ({ document, onFilesUpdated, onFileSelect, selectedFile
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
-                <a
-                  href={file.file_url}
-                  download
-                  onClick={e => e.stopPropagation()}
+                <button
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleDownload(file.file_url);
+                  }}
                   title="Download"
                   className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-background transition"
                 >
                   <Download className="w-4 h-4" />
-                </a>
+                </button>
                 {(isOwner || isSignatory || file.uploaded_by === user?.id) && (
                   <button
                     onClick={(e) => {

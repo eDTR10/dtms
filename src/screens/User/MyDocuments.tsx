@@ -198,7 +198,7 @@ const MyDocuments = () => {
   const [docs, setDocs] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<string>("Incomplete/For Signing");
+  const [filter, setFilter] = useState<string[]>(["Incomplete", "For Signing"]);
   const [typeFilter, setTypeFilter] = useState<string>("All");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
@@ -411,9 +411,9 @@ const MyDocuments = () => {
 
   const sanitizeFilename = (filename: string) => filename.replace(/[\\/:*?"<>|]/g, "_");
 
-  const getDownloadFilename = (doc: Document, fileUrl: string, index: number) => {
+  const getDownloadFilename = (doc: Document, fileUrl: string, _index: number) => {
     const originalName = fileUrl.split('/').pop()?.split('?')[0];
-    return sanitizeFilename(originalName || `${doc.tracknumber}-${index + 1}.pdf`);
+    return sanitizeFilename(originalName || `${doc.tracknumber}-${_index + 1}.pdf`);
   };
 
   const countDownloadFiles = (selectedDocs: Document[]) => (
@@ -909,7 +909,7 @@ const MyDocuments = () => {
     setSelectedTracks([]);
   };
 
-  const statuses = ["Incomplete/For Signing", "Signed", "All", "Archived", "Completed", "For Sending", "Rejected", "Viewed", "Viewing"];
+  const statuses = ["Incomplete", "For Signing", "Signed", "All", "Archived", "Completed", "For Sending", "Rejected", "Viewed", "Viewing"];
   const docTypes = ["All", ...Array.from(new Set(docs.map(d => d.type).filter(Boolean))).sort()];
   const officeOptions = Array.from(
     new Map(docs.filter(d => d.office != null && d.office_name).map(d => [String(d.office), d.office_name as string])).entries()
@@ -945,48 +945,16 @@ const MyDocuments = () => {
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // STAT CARD COUNTS
-  // Always computed from ALL docs (not filtered), using getDisplayStatus.
-  // This ensures the badge numbers never shift when you change the filter tab.
-  // Archived count is also always from all docs.
+  // PARTIALLY FILTERED: respects search, type, date, office, and project filters
+  // but NOT the status filter itself. This is used for stat counts.
   // ─────────────────────────────────────────────────────────────────────────────
-  const allNonArchivedDocs = docs.filter(d => !isArchivedTrack(d.tracknumber));
-
-  const statCounts = {
-    pending: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "For Sending").length,
-    forSigning: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "For Signing").length,
-    viewingCount: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Viewing").length,
-    viewedCount: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Viewed").length,
-    incomplete: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Incomplete").length,
-    completed: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Completed").length,
-    signedBySelf: allNonArchivedDocs.filter(d => getDisplayStatus(d) === "Signed").length,
-    archived: docs.filter(d => isArchivedTrack(d.tracknumber)).length,
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // FILTERED: what the table actually shows (respects all active filters)
-  // ─────────────────────────────────────────────────────────────────────────────
-  const filtered = docs.filter((d) => {
+  const partiallyFiltered = docs.filter(d => {
     const q = search.toLowerCase().trim();
     const matchSearch = !q ||
       d.title.toLowerCase().includes(q) ||
       d.tracknumber.toLowerCase().includes(q) ||
       (d.type ?? "").toLowerCase().includes(q) ||
       (d.requestor ?? "").toLowerCase().includes(q);
-
-    const displayStatus = getDisplayStatus(d);
-    const isArchived = isArchivedTrack(d.tracknumber);
-
-    let matchFilter = false;
-    if (filter === "All") {
-      matchFilter = true;
-    } else if (filter === "Archived") {
-      matchFilter = isArchived;
-    } else if (filter === "Incomplete/For Signing") {
-      matchFilter = displayStatus === "Incomplete" || displayStatus === "For Signing";
-    } else {
-      matchFilter = displayStatus === filter;
-    }
 
     const matchType = typeFilter === "All" || d.type === typeFilter;
     const documentDate = normalizeDateValue(d.datesubmitted);
@@ -995,11 +963,45 @@ const MyDocuments = () => {
     const matchOffice = selectedOffices.length === 0 || selectedOffices.includes(String(d.office));
     const matchProject = selectedProjects.length === 0 || (d.projects ?? []).map(String).some(projectId => selectedProjects.includes(projectId));
 
-    // Hide archived docs unless explicitly viewing the Archived tab
-    const matchArchiveVisibility = filter === "Archived" ? true : !isArchived;
-
-    return matchSearch && matchFilter && matchType && matchDateFrom && matchDateTo && matchOffice && matchProject && matchArchiveVisibility;
+    return matchSearch && matchType && matchDateFrom && matchDateTo && matchOffice && matchProject;
   });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // FILTERED: what the table actually shows (applies status filter to partiallyFiltered)
+  // ─────────────────────────────────────────────────────────────────────────────
+  const filtered = partiallyFiltered.filter((d) => {
+    const displayStatus = getDisplayStatus(d);
+    const isArchived = isArchivedTrack(d.tracknumber);
+
+    let matchFilter = false;
+    if (filter.includes("All")) {
+      matchFilter = true;
+    } else {
+      matchFilter = filter.some(f => {
+        if (f === "Archived") return isArchived;
+        return displayStatus === f;
+      });
+    }
+
+    // Hide archived docs unless explicitly viewing the Archived tab
+    const matchArchiveVisibility = filter.includes("Archived") ? true : !isArchived;
+
+    return matchFilter && matchArchiveVisibility;
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // QUICK STATS: counts for different document statuses based on table data
+  // ─────────────────────────────────────────────────────────────────────────────
+  const statCounts = {
+    pending: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "For Sending").length,
+    forSigning: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "For Signing").length,
+    viewingCount: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "Viewing").length,
+    viewedCount: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "Viewed").length,
+    incomplete: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "Incomplete").length,
+    completed: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "Completed").length,
+    signedBySelf: filtered.filter(d => !isArchivedTrack(d.tracknumber) && getDisplayStatus(d) === "Signed").length,
+    archived: filtered.filter(d => isArchivedTrack(d.tracknumber)).length,
+  };
 
   // ─────────────────────────────────────────────────────────────────────────────
   // PAGINATION: always slice filtered; never bypass it
@@ -1115,12 +1117,33 @@ const MyDocuments = () => {
         </div>
 
         <div className="flex gap-1.5 flex-wrap">
-          {statuses.map(s => (
-            <button key={s} onClick={() => setFilter(s)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filter === s ? "bg-primary text-primary-foreground" : "bg-accent text-muted-foreground hover:text-foreground"
-                }`}
-            >{s}</button>
-          ))}
+          {statuses.map(s => {
+            const isActive = filter.includes(s);
+            return (
+              <button key={s}
+                onClick={() => {
+                  if (s === "All") {
+                    setFilter(["All"]);
+                  } else {
+                    setFilter(prev => {
+                      const next = prev.filter(x => x !== "All");
+                      if (next.includes(s)) {
+                        const res = next.filter(x => x !== s);
+                        return res.length === 0 ? ["All"] : res;
+                      }
+                      return [...next, s];
+                    });
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border shadow-sm ${isActive
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card text-muted-foreground border-border hover:bg-accent hover:text-foreground"
+                  }`}
+              >
+                {s}
+              </button>
+            );
+          })}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -1225,9 +1248,9 @@ const MyDocuments = () => {
                   className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition shadow-sm md:w-full md:justify-center md:py-2">
                   <PenLine className="w-4 h-4" /> Batch Sign Selected
                 </button>
-                <button onClick={filter === "Archived" ? unarchiveSelectedTracks : archiveSelectedTracks}
+                <button onClick={filter.includes("Archived") ? unarchiveSelectedTracks : archiveSelectedTracks}
                   className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition shadow-sm md:w-full md:justify-center md:py-2">
-                  {filter === "Archived"
+                  {filter.includes("Archived")
                     ? <><ArchiveRestore className="w-4 h-4" /> Unarchive Selected</>
                     : <><Archive className="w-4 h-4" /> Archive Selected</>}
                 </button>
@@ -1455,11 +1478,10 @@ const MyDocuments = () => {
                     <span key={`ellipsis-${i}`} className="px-2 text-muted-foreground">...</span>
                   ) : (
                     <button key={n} onClick={() => setPage(n as number)}
-                      className={`min-w-[2rem] h-8 rounded-md text-xs font-medium border transition-colors ${
-                        n === page
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-                      }`}>{n}</button>
+                      className={`min-w-[2rem] h-8 rounded-md text-xs font-medium border transition-colors ${n === page
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                        }`}>{n}</button>
                   )
                 ));
               })()}

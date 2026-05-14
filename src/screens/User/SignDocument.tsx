@@ -44,8 +44,6 @@ const base64ToFile = (b64: string, filename: string, mime: string): File => {
   return new File([arr], filename, { type: mime });
 };
 
-
-
 const PNPKI_URL = (import.meta.env.VITE_PNPKI_SERVER as string || "").replace(/\/$/, "");
 const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string || "").replace(/\/$/, "");
 
@@ -80,6 +78,35 @@ type StampStyleSnapshot = {
   signedByColor: string;
 };
 
+// ─── Per-page stamp config ────────────────────────────────────────────────────
+// Key format: "<fileId>:<page>" e.g. "42:3"
+// fileStampRef stores one entry per (file, page) pair that has been stamped.
+type FileStampConfig = {
+  sigX: number; sigY: number; sigPage: number;
+  sigBoxW: number; sigBoxH: number;
+  placed: boolean; pdfW: number; pdfH: number;
+  style: StampStyleSnapshot;
+};
+
+/** Build the string key used to look up a stamp for a specific file+page. */
+const stampKey = (fileId: number, page: number) => `${fileId}:${page}`;
+
+/** Return all placed stamps for a given file across all pages. */
+const getPageStamps = (
+  ref: Record<string, FileStampConfig>,
+  fileId: number
+): FileStampConfig[] =>
+  Object.entries(ref)
+    .filter(([k, cfg]) => k.startsWith(`${fileId}:`) && cfg.placed)
+    .map(([, cfg]) => cfg);
+
+/** Returns true if any page of the file has a placed stamp. */
+const fileHasAnyStamp = (
+  ref: Record<string, FileStampConfig>,
+  fileId: number
+): boolean =>
+  Object.entries(ref).some(([k, cfg]) => k.startsWith(`${fileId}:`) && cfg.placed);
+
 const getManualUploadSizeError = (file: File): string | null => {
   if (file.size > MAX_UPLOAD_FILE_SIZE) {
     return `"${file.name}" exceeds the 12MB limit (${(file.size / 1024 / 1024).toFixed(1)} MB).`;
@@ -89,8 +116,6 @@ const getManualUploadSizeError = (file: File): string | null => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STAMP PREVIEW COMPONENT
-//  Matches the Signature Settings designer exactly: image and text are
-//  positioned using % values from localStorage (imgTop/imgLeft/txtTop/txtLeft).
 // ─────────────────────────────────────────────────────────────────────────────
 interface StampPreviewProps {
   cssW: number;
@@ -105,7 +130,7 @@ interface StampPreviewProps {
   imgWidthPct: number;
   txtTop: number;
   txtLeft: number;
-  textSizePct: number; // 0–100
+  textSizePct: number;
   fontFamily?: string;
   isItalic?: boolean;
   isBold?: boolean;
@@ -143,7 +168,6 @@ const StampPreview = ({
     if (!ctx) return;
     ctx.clearRect(0, 0, W, H);
 
-    // Mirror stampUtils._draw exactly so preview == output
     const tsp = textSizePct / 100;
     const nameFs = Math.max(0.01, tsp * H);
     const posFs = Math.max(0.01, tsp * 0.833 * H);
@@ -241,18 +265,15 @@ const SignDocument = () => {
   const [signatureProfiles, setSignatureProfiles] = useState<SignatureProfile[]>([]);
   const [selectedSignatureId, setSelectedSignatureId] = useState("");
 
-  // ── Per-file stamp tracking ───────────────────────────────────────────────
-  type FileStampConfig = {
-    sigX: number; sigY: number; sigPage: number;
-    sigBoxW: number; sigBoxH: number;
-    placed: boolean; pdfW: number; pdfH: number;
-    style: StampStyleSnapshot;
-  };
-
-  const fileStampRef = useRef<Record<number, FileStampConfig>>({})
-  const [fileStampsState, setFileStampsState] = useState<Record<number, FileStampConfig>>({});
+  // ── Per-page stamp tracking ───────────────────────────────────────────────
+  // Key: "<fileId>:<page>" — one entry per stamped (file, page) combination
+  const fileStampRef = useRef<Record<string, FileStampConfig>>({});
+  const [fileStampsState, setFileStampsState] = useState<Record<string, FileStampConfig>>({});
   const [activeDocFile, setActiveDocFile] = useState<DocumentFile | null>(null);
   const [manualSignedFiles, setManualSignedFiles] = useState<Record<number, File>>({});
+
+  // Track the previous sigPage so we can save stamps before navigating away
+  const prevSigPageRef = useRef(1);
 
   const mySig = doc?.signatories.find(s => s.user_id === user?.id);
 
@@ -274,14 +295,15 @@ const SignDocument = () => {
   const [batchSignFile, setBatchSignFile] = useState(false);
   const [stampPlaced, setStampPlaced] = useState(false);
 
+  // hasSatisfiedDigitalSign: checks if ANY page of every required file has a stamp
   const hasSatisfiedDigitalSign = useMemo(() => {
     if (!doc?.files) return false;
-    if (batchSignFile && stampPlaced) return true; // applies to all
+    if (batchSignFile && stampPlaced) return true;
     return requiredFileIndices.every(idx => {
       const f = doc.files![idx];
-      return fileStampsState[f.id]?.placed;
+      return fileHasAnyStamp(fileStampRef.current, f.id);
     });
-  }, [doc?.files, batchSignFile, stampPlaced, requiredFileIndices, fileStampsState]);
+  }, [doc?.files, batchSignFile, stampPlaced, requiredFileIndices, fileStampsState]); // fileStampsState in deps triggers recompute
 
   const hasSatisfiedManualSign = useMemo(() => {
     if (!doc?.files) return false;
@@ -291,18 +313,16 @@ const SignDocument = () => {
     });
   }, [doc?.files, requiredFileIndices, manualSignedFiles]);
 
-
   const [pdfVisible, setPdfVisible] = useState(true);
   const [placingMode, setPlacingMode] = useState(false);
   const [hoverPx, setHoverPx] = useState<{ left: number; top: number } | null>(null);
 
-  // FIX #4: Store aspect ratio at resize start so we can lock it
   const draggingStamp = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const resizingStamp = useRef<{
     startX: number; startY: number;
     origW: number; origH: number; origX: number; origY: number;
     corner: "se" | "sw" | "ne" | "nw";
-    aspectRatio: number; // FIX #4: locked ratio = origW / origH
+    aspectRatio: number;
   } | null>(null);
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 640);
@@ -314,8 +334,8 @@ const SignDocument = () => {
   }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const outerContainerRef = useRef<HTMLDivElement>(null); // measures available width (zoom-independent)
-  const viewerContainerRef = useRef<HTMLDivElement>(null); // matches canvas size for overlay positioning
+  const outerContainerRef = useRef<HTMLDivElement>(null);
+  const viewerContainerRef = useRef<HTMLDivElement>(null);
   const renderTaskRef = useRef<any>(null);
   const pdfLoadSeqRef = useRef(0);
   const pdfBlobUrlRef = useRef<string | null>(null);
@@ -328,7 +348,7 @@ const SignDocument = () => {
   const [pdfPageWidth, setPdfPageWidth] = useState(PDF_W);
   const [pdfPageHeight, setPdfPageHeight] = useState(PDF_H);
 
-  // ── Zoom ────────────────────────────────────────────────────────────────────
+  // ── Zoom ─────────────────────────────────────────────────────────────────
   const zoomLevelRef = useRef(1.0);
   const sigPageRef = useRef(1);
   const [zoomLevel, setZoomLevel] = useState(1.0);
@@ -342,7 +362,6 @@ const SignDocument = () => {
     }
     const page = await doc.getPage(pageNum);
     const vp1 = page.getViewport({ scale: 1 });
-    // Always measure the *outer* container so zoom doesn't feedback-loop the width
     const cw = outerContainerRef.current.clientWidth || 600;
     const scale = (cw / vp1.width) * (zoom ?? zoomLevelRef.current);
     const vp = page.getViewport({ scale });
@@ -435,7 +454,7 @@ const SignDocument = () => {
     };
   }, []);
 
-  // ── Credentials ───────────────────────────────────────────────────────────
+  // ── Credentials ──────────────────────────────────────────────────────────
   const [p12File, setP12File] = useState<File | null>(null);
   const [_p12FileName, setP12FileName] = useState("");
   const [password, setPassword] = useState("");
@@ -445,7 +464,7 @@ const SignDocument = () => {
   const [signImagePreview, setSignImagePreview] = useState("");
   const [showSignedBy, setShowSignedBy] = useState(false);
 
-  // ── Stamp layout settings (from Signature Settings designer) ─────────────
+  // ── Stamp layout settings ────────────────────────────────────────────────
   const [imgTop, setImgTop] = useState(Number(localStorage.getItem("sig_img_top")) || 5);
   const [imgLeft, setImgLeft] = useState(Number(localStorage.getItem("sig_img_left")) || 50);
   const [imgWidthPct, setImgWidthPct] = useState(Number(localStorage.getItem("sig_image_width_pct")) || 35);
@@ -453,7 +472,7 @@ const SignDocument = () => {
   const [txtLeft, setTxtLeft] = useState(Number(localStorage.getItem("sig_txt_left")) || 50);
   const [textSizePct, setTextSizePct] = useState(Number(localStorage.getItem("sig_text_size_pct")) || 18);
 
-  // ── Font style + colors (from Signature Settings) ─────────────────────────
+  // ── Font style + colors ──────────────────────────────────────────────────
   const [fontFamily, _setFontFamily] = useState(localStorage.getItem("sig_font_family") || "Inter, sans-serif");
   const [isItalic, _setIsItalic] = useState(localStorage.getItem("sig_is_italic") === "true");
   const [isBold, _setIsBold] = useState(localStorage.getItem("sig_is_bold") !== "false");
@@ -461,7 +480,7 @@ const SignDocument = () => {
   const [positionColor, _setPositionColor] = useState(localStorage.getItem("sig_pos_color") || "#2563eb");
   const [signedByColor, _setSignedByColor] = useState(localStorage.getItem("sig_signed_by_color") || "#64748b");
 
-  // ── Stamp sizing ──────────────────────────────────────────────────────────
+  // ── Stamp sizing ─────────────────────────────────────────────────────────
   const [sigX, setSigX] = useState(170);
   const [sigY, setSigY] = useState(720);
   const [sigBoxW, setSigBoxW] = useState(Number(localStorage.getItem("sig_stamp_width")) || 220);
@@ -488,23 +507,9 @@ const SignDocument = () => {
     positionColor,
     signedByColor,
   }), [
-    selectedSignatureId,
-    displayName,
-    sigPos,
-    showSignedBy,
-    signImagePreview,
-    imgTop,
-    imgLeft,
-    imgWidthPct,
-    txtTop,
-    txtLeft,
-    textSizePct,
-    fontFamily,
-    isItalic,
-    isBold,
-    nameColor,
-    positionColor,
-    signedByColor,
+    selectedSignatureId, displayName, sigPos, showSignedBy, signImagePreview,
+    imgTop, imgLeft, imgWidthPct, txtTop, txtLeft, textSizePct,
+    fontFamily, isItalic, isBold, nameColor, positionColor, signedByColor,
   ]);
 
   const applyStampStyle = useCallback((style: StampStyleSnapshot) => {
@@ -599,21 +604,55 @@ const SignDocument = () => {
     applySignatureProfile(profile);
   };
 
+  // ── sigPage change: save current page stamp, restore saved stamp for new page ──
   useEffect(() => {
     sigPageRef.current = sigPage;
-  }, [sigPage]);
 
-  useEffect(() => {
+    if (activeDocFile) {
+      const prevPage = prevSigPageRef.current;
+
+      // Save stamp state for the page we are LEAVING (only if it differs)
+      if (prevPage !== sigPage) {
+        const prevKey = stampKey(activeDocFile.id, prevPage);
+        fileStampRef.current[prevKey] = {
+          sigX, sigY, sigPage: prevPage, sigBoxW, sigBoxH,
+          placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
+          style: captureStampStyle(),
+        };
+        // Keep fileStampsState in sync for the tab indicator
+        setFileStampsState(prev => ({
+          ...prev,
+          [prevKey]: fileStampRef.current[prevKey],
+        }));
+      }
+
+      // Restore stamp state for the page we are ENTERING
+      const newKey = stampKey(activeDocFile.id, sigPage);
+      const saved = fileStampRef.current[newKey];
+      if (saved) {
+        setSigX(saved.sigX);
+        setSigY(saved.sigY);
+        setSigBoxW(saved.sigBoxW);
+        setSigBoxH(saved.sigBoxH);
+        setStampPlaced(saved.placed);
+        applyStampStyle(saved.style);
+      } else {
+        // No stamp on this page yet — reset position but keep current size & style
+        setSigX(170);
+        setSigY(720);
+        setStampPlaced(false);
+      }
+    }
+
+    prevSigPageRef.current = sigPage;
+
     if (pdfDoc) renderPage(pdfDoc, sigPage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sigPage, pdfDoc]);
 
-  // ── Global pointer handlers for drag / resize ─────────────────────────────
-  // FIX #4: aspect ratio is locked — width drives height via stored ratio
+  // ── Global pointer handlers for drag / resize ────────────────────────────
   useEffect(() => {
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
-    // FIX #1: absolute minimums lowered to 20×10 so tiny counter-sigs are possible
     const MIN_W = 10;
     const MIN_H = 5;
 
@@ -626,10 +665,9 @@ const SignDocument = () => {
         setSigY(clamp(origY - dy, 0, pdfPageHeight - sigBoxH));
       }
       if (resizingStamp.current) {
-        const { startX, startY: _startY, origW, origH, origX, origY, corner, aspectRatio } = resizingStamp.current;
+        const { startX, origW, origH, origX, origY, corner, aspectRatio } = resizingStamp.current;
         const dw = (clientX - startX) / renderScale;
 
-        // FIX #4: derive height from new width to keep ratio locked
         if (corner === "se") {
           const newW = clamp(origW + dw, MIN_W, pdfPageWidth);
           const newH = clamp(newW / aspectRatio, MIN_H, pdfPageHeight);
@@ -688,7 +726,6 @@ const SignDocument = () => {
     setSigX(prev => Math.max(0, Math.min(prev, pdfPageWidth - sigBoxW)));
     setSigY(prev => Math.max(0, Math.min(prev, pdfPageHeight - sigBoxH)));
   }, [pdfPageWidth, pdfPageHeight, sigBoxW, sigBoxH]);
-
 
   const isOwner = doc?.userID === user?.id;
   const isViewer = mySig?.role === "viewer";
@@ -867,7 +904,7 @@ const SignDocument = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [primaryTrack]);
 
-  // ── Overlay event handler ─────────────────────────────────────────────────
+  // ── Overlay event handler ────────────────────────────────────────────────
   const handleOverlayEvent = (e: React.MouseEvent<HTMLDivElement>, isClick: boolean) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const sc = renderScale;
@@ -885,58 +922,66 @@ const SignDocument = () => {
       setStampPlaced(true);
       setPlacingMode(false);
       setHoverPx(null);
+
       if (activeDocFile) {
+        const key = stampKey(activeDocFile.id, sigPage);
         const cfg: FileStampConfig = {
           sigX: newX, sigY: newY, sigPage, sigBoxW, sigBoxH,
           placed: true, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
           style: captureStampStyle(),
         };
-        fileStampRef.current[activeDocFile.id] = cfg;
-        setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
+        fileStampRef.current[key] = cfg;
+        setFileStampsState(prev => ({ ...prev, [key]: cfg }));
       }
     } else {
       setHoverPx({ left, top });
     }
   };
 
+  // ── Switch active file ────────────────────────────────────────────────────
   const switchToFile = (newFile: DocumentFile) => {
+    // Save current page's stamp before switching files
     if (activeDocFile) {
+      const key = stampKey(activeDocFile.id, sigPage);
       const cfg: FileStampConfig = {
         sigX, sigY, sigPage, sigBoxW, sigBoxH,
         placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
         style: captureStampStyle(),
       };
-      fileStampRef.current[activeDocFile.id] = cfg;
-      setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
+      fileStampRef.current[key] = cfg;
+      setFileStampsState(prev => ({ ...prev, [key]: cfg }));
     }
-    const saved = fileStampRef.current[newFile.id];
+
+    // Restore most recently saved stamp for the new file (prefer page 1, else first found)
+    const page1Key = stampKey(newFile.id, 1);
+    const savedPage1 = fileStampRef.current[page1Key];
+    // Find any saved stamp for this file
+    const anyKey = Object.keys(fileStampRef.current).find(k => k.startsWith(`${newFile.id}:`) && fileStampRef.current[k].placed);
+    const saved = savedPage1 || (anyKey ? fileStampRef.current[anyKey] : undefined);
+
+    const targetPage = saved ? saved.sigPage : 1;
+    prevSigPageRef.current = targetPage; // prevent double-save on page effect
+
     if (saved) {
       setSigX(saved.sigX); setSigY(saved.sigY); setSigPage(saved.sigPage);
       setSigBoxW(saved.sigBoxW); setSigBoxH(saved.sigBoxH); setStampPlaced(saved.placed);
       applyStampStyle(saved.style);
     } else {
       setSigX(170); setSigY(720); setSigPage(1); setStampPlaced(false);
-      // No saved config — restore to regular stamp dims
       setSigBoxW(Number(localStorage.getItem("sig_stamp_width")) || 220);
       setSigBoxH(Number(localStorage.getItem("sig_stamp_height")) || 80);
     }
+
     setPlacingMode(false); setHoverPx(null);
     activeFileIdRef.current = newFile.id;
     setActiveDocFile(newFile);
     setSelectedFileUrl(newFile.file_url);
     setPdfVisible(true);
-    loadPdf(newFile.file_url, { force: true, fileId: newFile.id, page: saved?.sigPage || 1 });
+    loadPdf(newFile.file_url, { force: true, fileId: newFile.id, page: targetPage });
   };
 
-
-
-
-  // ── Build composite stamp blob for backend using shared stampUtils ─────────
+  // ── Build composite stamp blob ────────────────────────────────────────────
   const buildStampCanvas = (style?: StampStyleSnapshot, dims?: { width: number; height: number }): Promise<Blob | null> => {
-    // For tiny stamps (counter-sign), increase renderScale so the canvas is
-    // drawn at full quality (~320px tall).  The AP matrix from pyhanko will
-    // uniformly scale it down to the actual field size — aspect ratio is
-    // always preserved because cW was computed from cH * (stampW/stampH).
     const normalStampH = Number(localStorage.getItem("sig_stamp_height")) || 80;
     const targetW = dims?.width ?? sigBoxW;
     const targetH = dims?.height ?? sigBoxH;
@@ -972,37 +1017,36 @@ const SignDocument = () => {
     if (!password) { setError("Please enter your P12 password."); return; }
     if (!PNPKI_URL) { setError("PNPKI server URL is not configured."); return; }
 
+    // Save the current page's stamp before signing
     if (activeDocFile) {
+      const key = stampKey(activeDocFile.id, sigPage);
       const cfg: FileStampConfig = {
         sigX, sigY, sigPage, sigBoxW, sigBoxH,
         placed: stampPlaced, pdfW: pdfPageWidth, pdfH: pdfPageHeight,
         style: captureStampStyle(),
       };
-      fileStampRef.current[activeDocFile.id] = cfg;
-      setFileStampsState(prev => ({ ...prev, [activeDocFile.id]: cfg }));
+      fileStampRef.current[key] = cfg;
+      setFileStampsState(prev => ({ ...prev, [key]: cfg }));
     }
 
     const allDocFiles = doc.files || [];
-    let filesToSign = allDocFiles.filter((f, idx) => requiredFileIndices.includes(idx) && fileStampRef.current[f.id]?.placed);
+
+    // Determine which files to sign: those with at least one page stamp placed
+    let filesToSign = allDocFiles.filter((f, idx) =>
+      requiredFileIndices.includes(idx) && fileHasAnyStamp(fileStampRef.current, f.id)
+    );
 
     if ((batchSignFile || isBatchMode) && activeDocFile && stampPlaced) {
       filesToSign = allDocFiles.filter((_, idx) => requiredFileIndices.includes(idx));
-      const activeCfg = fileStampRef.current[activeDocFile.id];
-      filesToSign.forEach(f => { fileStampRef.current[f.id] = activeCfg; });
     }
 
     if (filesToSign.length === 0) { setError("Place your signature on at least one document file first."); return; }
 
     setSigning(true); setError(null);
     setSigningFailures([]);
-    setSigningProgress({
-      total: 0,
-      completed: 0,
-      success: 0,
-      failed: 0,
-      currentLabel: "Preparing files...",
-    });
+    setSigningProgress({ total: 0, completed: 0, success: 0, failed: 0, currentLabel: "Preparing files..." });
     const collected: Array<{ blob: Blob; name: string }> = [];
+
     try {
       const tok = localStorage.getItem("auth_token");
       const tracksToProcess = isBatchMode ? tracksArray : [doc.tracknumber];
@@ -1019,132 +1063,123 @@ const SignDocument = () => {
         if (trackNum !== doc.tracknumber) {
           try { currentDoc = await documentApi.getByTrack(trackNum); }
           catch (e) {
-            totalFailed += 1;
-            totalCompleted += 1;
-            totalPlanned += 1;
+            totalFailed += 1; totalCompleted += 1; totalPlanned += 1;
             runFailures.push(`[${trackNum}] Failed to load document details.`);
-            setSigningProgress({
-              total: totalPlanned,
-              completed: totalCompleted,
-              success: totalSuccess,
-              failed: totalFailed,
-              currentLabel: `Skipping ${trackNum} (load error)`,
-            });
+            setSigningProgress({ total: totalPlanned, completed: totalCompleted, success: totalSuccess, failed: totalFailed, currentLabel: `Skipping ${trackNum} (load error)` });
             continue;
           }
         }
         if (!currentDoc || !currentDoc.files) continue;
 
-        let curFilesToSign = currentDoc.files.filter((f, idx) => requiredFileIndices.includes(idx) && fileStampRef.current[f.id]?.placed);
+        let curFilesToSign = currentDoc.files.filter((f, idx) =>
+          requiredFileIndices.includes(idx) && fileHasAnyStamp(fileStampRef.current, f.id)
+        );
         if ((isBatchMode || batchSignFile) && activeDocFile && stampPlaced) {
           curFilesToSign = currentDoc.files.filter((_, idx) => requiredFileIndices.includes(idx));
         }
         if (curFilesToSign.length === 0) continue;
 
-        totalPlanned += curFilesToSign.length;
-        setSigningProgress({
-          total: totalPlanned,
-          completed: totalCompleted,
-          success: totalSuccess,
-          failed: totalFailed,
-          currentLabel: `Processing ${trackNum}...`,
+        // Count total signing operations: each file × its page stamps
+        const filePageCounts = curFilesToSign.map(f => {
+          if ((isBatchMode || batchSignFile) && activeDocFile) return 1;
+          const stamps = getPageStamps(fileStampRef.current, f.id);
+          return Math.max(1, stamps.length);
         });
+        totalPlanned += filePageCounts.reduce((a, b) => a + b, 0);
+        setSigningProgress({ total: totalPlanned, completed: totalCompleted, success: totalSuccess, failed: totalFailed, currentLabel: `Processing ${trackNum}...` });
 
         let appendedCount = 0;
 
         for (let i = 0; i < curFilesToSign.length; i++) {
           const docFile = curFilesToSign[i];
-          setSigningProgress({
-            total: totalPlanned,
-            completed: totalCompleted,
-            success: totalSuccess,
-            failed: totalFailed,
-            currentLabel: `${trackNum} • file ${i + 1}/${curFilesToSign.length}`,
-          });
+
+          // Collect stamps for this file
+          let pageStamps: FileStampConfig[];
+          if ((isBatchMode || batchSignFile) && activeDocFile) {
+            // Use the active stamp (from current page) for all files
+            const activeCfg = fileStampRef.current[stampKey(activeDocFile.id, sigPage)];
+            pageStamps = activeCfg ? [activeCfg] : [];
+          } else {
+            pageStamps = getPageStamps(fileStampRef.current, docFile.id);
+          }
+
+          if (pageStamps.length === 0) continue;
+
+          setSigningProgress({ total: totalPlanned, completed: totalCompleted, success: totalSuccess, failed: totalFailed, currentLabel: `${trackNum} • file ${i + 1}/${curFilesToSign.length}` });
 
           try {
-            let cfg = fileStampRef.current[docFile.id];
-            if ((isBatchMode || batchSignFile) && activeDocFile) cfg = fileStampRef.current[activeDocFile.id];
-            if (!cfg) throw new Error("No stamp placement found for this file.");
-
+            // Fetch the source PDF once, then apply stamps page by page (chaining)
             const res = await fetch(docFile.file_url, { headers: tok ? { Authorization: `Token ${tok}` } : {} });
             if (!res.ok) throw new Error(`Fetch failed (HTTP ${res.status}).`);
-            const pdfBlob = await res.blob();
+            let currentPdfBlob = await res.blob();
 
-            const xRatio = cfg.sigX / cfg.pdfW;
-            const wRatio = cfg.sigBoxW / cfg.pdfW;
-            const hRatio = cfg.sigBoxH / cfg.pdfH;
-            const styleForFile = cfg.style || captureStampStyle();
-            const compositeBlob = await buildStampCanvas(styleForFile, { width: cfg.sigBoxW, height: cfg.sigBoxH });
-            // Server expects y_ratio from the TOP of the page (top-origin).
-            // cfg.sigY is bottom-origin (PDF convention), so convert:
-            //   top_of_box_from_top = pdfH - sigY - sigBoxH
-            const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
+            // Sign once per page stamp, chaining output → input
+            for (let pi = 0; pi < pageStamps.length; pi++) {
+              const cfg = pageStamps[pi];
+              setSigningProgress({ total: totalPlanned, completed: totalCompleted, success: totalSuccess, failed: totalFailed, currentLabel: `${trackNum} • file ${i + 1} • page ${cfg.sigPage}` });
 
-            const fd = new FormData();
-            fd.append("pdf_file", pdfBlob, `${trackNum}-${i}.pdf`);
-            fd.append("p12_file", p12File, p12File.name);
-            fd.append("password", password);
-            // Always send signer_name / sign_note — the PNPKI server uses them
-            // for PDF certificate metadata (not the visual stamp).  Visual stamp
-            // appearance is controlled entirely by the sign_design PNG.
-            fd.append("signer_name", styleForFile.displayName || `${user?.first_name} ${user?.last_name}`);
-            fd.append("sign_note", styleForFile.sigPos || user?.position || "");
-            fd.append("page", String(cfg.sigPage));
-            fd.append("sign_all_pages", batchSignPage ? "true" : "false");
-            fd.append("x_ratio", String(xRatio));
-            fd.append("y_ratio", String(yRatio));
-            fd.append("w_ratio", String(wRatio));
-            fd.append("h_ratio", String(hRatio));
-            if (compositeBlob) fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
-            if (styleForFile.signImagePreview) {
-              try {
-                const [hdr, b64] = styleForFile.signImagePreview.split(",");
-                const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
-                fd.append("sign_image", base64ToFile(b64, "signature.png", mime), "signature.png");
-              } catch {
-                // Ignore malformed preview payload and continue signing.
+              const xRatio = cfg.sigX / cfg.pdfW;
+              const yRatio = (cfg.pdfH - cfg.sigY - cfg.sigBoxH) / cfg.pdfH;
+              const wRatio = cfg.sigBoxW / cfg.pdfW;
+              const hRatio = cfg.sigBoxH / cfg.pdfH;
+              const styleForFile = cfg.style || captureStampStyle();
+              const compositeBlob = await buildStampCanvas(styleForFile, { width: cfg.sigBoxW, height: cfg.sigBoxH });
+
+              const fd = new FormData();
+              fd.append("pdf_file", currentPdfBlob, `${trackNum}-${i}.pdf`);
+              fd.append("p12_file", p12File, p12File.name);
+              fd.append("password", password);
+              fd.append("signer_name", styleForFile.displayName || `${user?.first_name} ${user?.last_name}`);
+              fd.append("sign_note", styleForFile.sigPos || user?.position || "");
+              fd.append("page", String(cfg.sigPage));
+              fd.append("sign_all_pages", batchSignPage ? "true" : "false");
+              fd.append("x_ratio", String(xRatio));
+              fd.append("y_ratio", String(yRatio));
+              fd.append("w_ratio", String(wRatio));
+              fd.append("h_ratio", String(hRatio));
+              if (compositeBlob) fd.append("sign_design", new File([compositeBlob], "sign-design.png", { type: "image/png" }));
+              if (styleForFile.signImagePreview) {
+                try {
+                  const [hdr, b64] = styleForFile.signImagePreview.split(",");
+                  const mime = hdr?.match(/:(.*?);/)?.[1] || "image/png";
+                  fd.append("sign_image", base64ToFile(b64, "signature.png", mime), "signature.png");
+                } catch { /* ignore */ }
               }
+
+              const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
+              if (!signRes.ok) throw new Error(`PNPKI sign failed (HTTP ${signRes.status}).`);
+
+              // Output of this pass becomes input for next pass
+              currentPdfBlob = await signRes.blob();
+              totalCompleted++;
+              totalSuccess++;
+              setSigningProgress({ total: totalPlanned, completed: totalCompleted, success: totalSuccess, failed: totalFailed, currentLabel: `${trackNum} • file ${i + 1} • page ${cfg.sigPage}` });
             }
 
-            const signRes = await fetch(`${PNPKI_URL}/sign-pdf`, { method: "POST", body: fd });
-            if (!signRes.ok) throw new Error(`PNPKI sign failed (HTTP ${signRes.status}).`);
-
-            const signedPdfBlob = await signRes.blob();
+            // All page stamps applied — upload the final chained PDF
             const signedName = `${trackNum}-signed-${i + 1}.pdf`;
-            collected.push({ blob: signedPdfBlob, name: signedName });
+            collected.push({ blob: currentPdfBlob, name: signedName });
 
-            // Upload this single signed file immediately (one request per file to avoid 413)
             const uploadFd = new FormData();
-            uploadFd.append("file_0", signedPdfBlob, signedName);
+            uploadFd.append("file_0", currentPdfBlob, signedName);
             uploadFd.append("file_id_0", String(docFile.id));
-            uploadFd.append("is_final", "true"); // Always true because the button is only enabled when satisfied
+            uploadFd.append("is_final", "true");
             const uploadRes = await fetch(`${SERVER_URL}/document/${currentDoc.id}/sign_files/`, {
               method: "PATCH", headers: tok ? { Authorization: `Token ${tok}` } : {}, body: uploadFd,
             });
             if (!uploadRes.ok) throw new Error(`Upload failed (HTTP ${uploadRes.status}).`);
-
             appendedCount++;
-            totalSuccess++;
+
           } catch (fileErr: any) {
             totalFailed++;
-            runFailures.push(`[${trackNum}] File ${i + 1}: ${fileErr?.message || "Unknown signing error."}`);
-          } finally {
             totalCompleted++;
-            setSigningProgress({
-              total: totalPlanned,
-              completed: totalCompleted,
-              success: totalSuccess,
-              failed: totalFailed,
-              currentLabel: `${trackNum} • file ${i + 1}/${curFilesToSign.length}`,
-            });
+            runFailures.push(`[${trackNum}] File ${i + 1}: ${fileErr?.message || "Unknown signing error."}`);
+            setSigningProgress({ total: totalPlanned, completed: totalCompleted, success: totalSuccess, failed: totalFailed, currentLabel: `${trackNum} • file ${i + 1} failed` });
           }
         }
 
-        const signedAnyForTrack = appendedCount > 0;
-        if (signedAnyForTrack) {
+        if (appendedCount > 0) {
           try {
-            // Refresh the document to get fresh signatories after file uploads
             const freshDoc = await documentApi.getByTrack(trackNum);
             const curSig = freshDoc.signatories?.find(s => s.user_id === user?.id && String(s.status).toLowerCase() === "pending");
             if (curSig) {
@@ -1167,7 +1202,6 @@ const SignDocument = () => {
       if (primaryTrack) {
         const updatedPrimaryDoc = await documentApi.getByTrack(primaryTrack);
         setDoc(updatedPrimaryDoc);
-        // Refresh activeDocFile so "Add Another Signature" uses the new signed URL
         if (activeDocFile && updatedPrimaryDoc.files) {
           const freshFile = updatedPrimaryDoc.files.find((f: DocumentFile) => f.id === activeDocFile.id);
           if (freshFile) {
@@ -1212,7 +1246,7 @@ const SignDocument = () => {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         const lastPart = f.file_url.split("/").pop();
-        a.download = lastPart ? lastPart.split("?")[0] : "";
+        a.download = lastPart ? lastPart.split("?")[0] : "document.pdf";
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(a.href);
         if (i < filesToDownload.length - 1) await new Promise(r => setTimeout(r, 350));
@@ -1234,7 +1268,7 @@ const SignDocument = () => {
       const token = localStorage.getItem("auth_token");
       const uploadFd = new FormData();
       entries.forEach(([fileId, file], i) => { uploadFd.append(`file_${i}`, file, file.name); uploadFd.append(`file_id_${i}`, fileId); });
-      uploadFd.append("is_final", "true"); // Always true because the button is only enabled when satisfied
+      uploadFd.append("is_final", "true");
       const uploadRes = await fetch(`${SERVER_URL}/document/${doc.id}/sign_files/`, {
         method: "PATCH", headers: token ? { Authorization: `Token ${token}` } : {}, body: uploadFd,
       });
@@ -1249,7 +1283,7 @@ const SignDocument = () => {
     }
   };
 
-  // ── Zoom handlers ─────────────────────────────────────────────────────────
+  // ── Zoom handlers ────────────────────────────────────────────────────────
   const handleZoomIn = () => {
     const newZoom = Math.min(5.0, parseFloat((zoomLevelRef.current + 0.25).toFixed(2)));
     zoomLevelRef.current = newZoom;
@@ -1263,8 +1297,7 @@ const SignDocument = () => {
     if (pdfDoc) renderPage(pdfDoc, sigPage, newZoom);
   };
 
-  // ── Resize handle helper ──────────────────────────────────────────────────
-  // FIX #3: X button is now outside; FIX #4: aspectRatio stored on mousedown
+  // ── Resize handle helper ─────────────────────────────────────────────────
   const HANDLE_R = isMobile ? 4 : 7;
   const makeResizeHandle = (corner: "se" | "sw" | "ne" | "nw") => {
     const pos: React.CSSProperties = {
@@ -1289,7 +1322,6 @@ const SignDocument = () => {
         startX: clientX, startY: clientY,
         origW: sigBoxW, origH: sigBoxH, origX: sigX, origY: sigY,
         corner,
-        // FIX #4: capture the ratio at the moment the user starts resizing
         aspectRatio: sigBoxW / sigBoxH,
       };
     };
@@ -1358,11 +1390,7 @@ const SignDocument = () => {
     if (!rawPath) return "";
     const lastSegment = rawPath.split("/").pop() || rawPath;
     const cleanName = lastSegment.split("?")[0];
-    try {
-      return decodeURIComponent(cleanName);
-    } catch {
-      return cleanName;
-    }
+    try { return decodeURIComponent(cleanName); } catch { return cleanName; }
   })();
 
   return (
@@ -1391,11 +1419,7 @@ const SignDocument = () => {
               <div className="w-full pl-6 mt-1">
                 <div className="h-1 w-full bg-blue-200 dark:bg-blue-900/40 rounded-full overflow-hidden">
                   <div className="h-full bg-blue-600 transition-all duration-300"
-                    style={{
-                      width: `${signingProgress && signingProgress.total > 0
-                        ? (signingProgress.completed / signingProgress.total) * 100
-                        : 8}%`,
-                    }} />
+                    style={{ width: `${signingProgress && signingProgress.total > 0 ? (signingProgress.completed / signingProgress.total) * 100 : 8}%` }} />
                 </div>
                 {signingProgress && (
                   <p className="mt-1 text-[11px] text-blue-700/90 dark:text-blue-300/90">
@@ -1458,19 +1482,31 @@ const SignDocument = () => {
                     <div className="flex items-center gap-1.5 px-4 pt-3 pb-2 flex-wrap border-b border-border bg-muted/20">
                       <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mr-1">Files:</span>
                       {doc.files.map((f, idx) => {
-                        const cfg = fileStampsState[f.id];
+                        const hasStamp = fileHasAnyStamp(fileStampRef.current, f.id);
                         const isActive = activeDocFile?.id === f.id;
+                        // Count stamped pages for this file
+                        const stampedPageCount = Object.keys(fileStampsState).filter(
+                          k => k.startsWith(`${f.id}:`) && fileStampsState[k]?.placed
+                        ).length;
                         return (
                           <button key={f.id} onClick={() => switchToFile(f)}
                             className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition ${isActive ? "bg-primary text-primary-foreground shadow-sm" : "bg-accent text-foreground hover:bg-accent/70"}`}>
-                            {cfg?.placed ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" /> : <FileText className="w-3 h-3 shrink-0 opacity-60" />}
+                            {hasStamp
+                              ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
+                              : <FileText className="w-3 h-3 shrink-0 opacity-60" />
+                            }
                             File {idx + 1}
+                            {stampedPageCount > 0 && (
+                              <span className={`ml-1 text-[9px] px-1 rounded-full ${isActive ? "bg-white/20" : "bg-green-500/20 text-green-700 dark:text-green-400"}`}>
+                                {stampedPageCount}p
+                              </span>
+                            )}
                           </button>
                         );
                       })}
                       {canSign && (
                         <span className="ml-auto text-[10px] text-muted-foreground">
-                          {requiredFileIndices.filter(idx => fileStampsState[doc.files![idx].id]?.placed).length}/{requiredFileIndices.length} stamped
+                          {requiredFileIndices.filter(idx => fileHasAnyStamp(fileStampRef.current, doc.files![idx].id)).length}/{requiredFileIndices.length} stamped
                         </span>
                       )}
                     </div>
@@ -1492,6 +1528,16 @@ const SignDocument = () => {
                           className="p-1 rounded hover:bg-accent disabled:opacity-30 transition" title="Next page">
                           <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
                         </button>
+                        {/* Page stamp indicator */}
+                        {activeDocFile && (() => {
+                          const key = stampKey(activeDocFile.id, sigPage);
+                          const hasStampOnPage = fileStampsState[key]?.placed || (fileStampRef.current[key]?.placed);
+                          return hasStampOnPage ? (
+                            <span className="ml-1 flex items-center gap-0.5 text-[10px] text-green-600 dark:text-green-400 font-medium">
+                              <CheckCircle2 className="w-3 h-3" /> signed
+                            </span>
+                          ) : null;
+                        })()}
                         {/* Zoom controls */}
                         <div className="flex items-center gap-0.5 ml-2 pl-2 border-l border-border">
                           <button onClick={handleZoomOut} disabled={zoomLevel <= 0.5}
@@ -1535,7 +1581,7 @@ const SignDocument = () => {
                           disabled={!canPlaceSignature || !isActiveFileRequired}
                           title={!isActiveFileRequired ? "You are not assigned to sign this file." : !canPlaceSignature ? "Please wait for the selected file to finish loading." : undefined}
                           className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-600 w-auto sm:w-full sm:col-span-3">
-                          <MousePointer2 className="w-3.5 h-3.5" /> <span className=" sm:hidden">Place Signature</span>
+                          <MousePointer2 className="w-3.5 h-3.5" /> <span className="sm:hidden">Place Signature</span>
                         </button>
                       )}
                       {canSign && placingMode && (
@@ -1546,7 +1592,7 @@ const SignDocument = () => {
                       )}
                       {canSign && pdfBlobUrl && (
                         <div className="flex items-center justify-center gap-1.5 bg-card rounded-lg border border-border p-1 shadow-sm mr-2 w-auto sm:w-full sm:col-span-3 sm:mr-0 sm:min-w-0 sm:px-2">
-                          <span className=" text-[10px] font-bold text-muted-foreground uppercase px-1 sm:hidden">Batch</span>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase px-1 sm:hidden">Batch</span>
                           <button onClick={() => setBatchSignPage(!batchSignPage)} title="Apply to all pages in this file"
                             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition ${batchSignPage ? "bg-blue-600 text-white shadow" : "text-muted-foreground hover:text-foreground hover:bg-accent"}`}>
                             <Layers className="w-3.5 h-3.5" /> <span className="sm:hidden">By Page</span>
@@ -1557,7 +1603,6 @@ const SignDocument = () => {
                           </button>
                         </div>
                       )}
-
                     </div>
                   </div>
 
@@ -1600,7 +1645,7 @@ const SignDocument = () => {
                                 <div className="absolute top-0 inset-x-0 bg-blue-600/90 text-white text-xs px-4 py-2 flex items-center justify-between pointer-events-none">
                                   <span className="flex items-center gap-1.5">
                                     <MousePointer2 className="w-3.5 h-3.5" />
-                                    Click to place your signature stamp
+                                    Click to place your signature stamp on page {sigPage}
                                   </span>
                                   <span className="font-mono opacity-75">
                                     {hoverPx ? `x:${Math.round(sigX)} y:${Math.round(sigY)} pg:${sigPage}` : "Move cursor to preview"}
@@ -1630,25 +1675,17 @@ const SignDocument = () => {
                                       sigPos={sigPos}
                                       showSignedBy={showSignedBy}
                                       fallbackName={fallbackName}
-                                      imgTop={imgTop}
-                                      imgLeft={imgLeft}
-                                      imgWidthPct={imgWidthPct}
-                                      txtTop={txtTop}
-                                      txtLeft={txtLeft}
-                                      textSizePct={textSizePct}
-                                      fontFamily={fontFamily}
-                                      isItalic={isItalic}
-                                      isBold={isBold}
-                                      nameColor={nameColor}
-                                      positionColor={positionColor}
-                                      signedByColor={signedByColor}
+                                      imgTop={imgTop} imgLeft={imgLeft} imgWidthPct={imgWidthPct}
+                                      txtTop={txtTop} txtLeft={txtLeft} textSizePct={textSizePct}
+                                      fontFamily={fontFamily} isItalic={isItalic} isBold={isBold}
+                                      nameColor={nameColor} positionColor={positionColor} signedByColor={signedByColor}
                                     />
                                   </div>
                                 )}
                               </div>
                             )}
 
-                            {/* ── Confirmed stamp ── */}
+                            {/* ── Confirmed stamp for current page ── */}
                             {!placingMode && stampPlaced && (() => {
                               const cssLeft = sigX * renderScale;
                               const cssTop = (pdfPageHeight - sigY - sigBoxH) * renderScale;
@@ -1656,29 +1693,17 @@ const SignDocument = () => {
                               const cssH = sigBoxH * renderScale;
 
                               return (
-                                // FIX #3: wrapper has overflow:visible so X button can live outside the border
                                 <div
                                   className="absolute select-none"
-                                  style={{
-                                    left: cssLeft, top: cssTop,
-                                    width: cssW, height: cssH,
-                                    zIndex: 5,
-                                    touchAction: "none",
-                                    // overflow must be visible so the X button renders outside
-                                    overflow: "visible",
-                                  }}
+                                  style={{ left: cssLeft, top: cssTop, width: cssW, height: cssH, zIndex: 5, touchAction: "none", overflow: "visible" }}
                                 >
-                                  {/* The visible dashed border box — separate inner div */}
                                   <div
                                     style={{
-                                      position: "absolute",
-                                      inset: 0,
-                                      border: "1.5px dashed #3b82f6",
-                                      borderRadius: 3,
+                                      position: "absolute", inset: 0,
+                                      border: "1.5px dashed #3b82f6", borderRadius: 3,
                                       background: "rgba(255,255,255,0.90)",
                                       boxShadow: "0 2px 12px rgba(59,130,246,0.15)",
-                                      cursor: "move",
-                                      overflow: "hidden",
+                                      cursor: "move", overflow: "hidden",
                                     }}
                                     onMouseDown={e => {
                                       if ((e.target as HTMLElement).dataset.handle) return;
@@ -1693,53 +1718,39 @@ const SignDocument = () => {
                                     }}
                                   >
                                     <StampPreview
-                                      cssW={cssW}
-                                      cssH={cssH}
+                                      cssW={cssW} cssH={cssH}
                                       signImagePreview={signImagePreview}
-                                      displayName={displayName}
-                                      sigPos={sigPos}
-                                      showSignedBy={showSignedBy}
+                                      displayName={displayName} sigPos={sigPos} showSignedBy={showSignedBy}
                                       fallbackName={fallbackName}
-                                      imgTop={imgTop}
-                                      imgLeft={imgLeft}
-                                      imgWidthPct={imgWidthPct}
-                                      txtTop={txtTop}
-                                      txtLeft={txtLeft}
-                                      textSizePct={textSizePct}
-                                      fontFamily={fontFamily}
-                                      isItalic={isItalic}
-                                      isBold={isBold}
-                                      nameColor={nameColor}
-                                      positionColor={positionColor}
-                                      signedByColor={signedByColor}
+                                      imgTop={imgTop} imgLeft={imgLeft} imgWidthPct={imgWidthPct}
+                                      txtTop={txtTop} txtLeft={txtLeft} textSizePct={textSizePct}
+                                      fontFamily={fontFamily} isItalic={isItalic} isBold={isBold}
+                                      nameColor={nameColor} positionColor={positionColor} signedByColor={signedByColor}
                                     />
                                   </div>
 
-                                  {/* ── Corner resize handles ── */}
+                                  {/* Corner resize handles */}
                                   {(["nw", "ne", "sw", "se"] as const).map(c => makeResizeHandle(c))}
 
-                                  {/* ── FIX #3: X button positioned OUTSIDE the stamp box (top-right, above border) ── */}
+                                  {/* Remove stamp button */}
                                   <div
-                                    title="Remove stamp"
+                                    title="Remove stamp from this page"
                                     data-handle="true"
                                     className="absolute flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-full cursor-pointer transition-colors z-30 shadow-md"
-                                    style={{
-                                      // Sit above and to the right of the stamp border
-                                      top: isMobile ? -7 : -10,
-                                      right: isMobile ? -7 : -10,
-                                      width: isMobile ? 14 : 20,
-                                      height: isMobile ? 14 : 20,
-                                    }}
+                                    style={{ top: isMobile ? -7 : -10, right: isMobile ? -7 : -10, width: isMobile ? 14 : 20, height: isMobile ? 14 : 20 }}
                                     onClick={e => {
                                       e.preventDefault(); e.stopPropagation();
                                       setStampPlaced(false);
                                       if (activeDocFile) {
+                                        const key = stampKey(activeDocFile.id, sigPage);
+                                        if (fileStampRef.current[key]) {
+                                          fileStampRef.current[key] = { ...fileStampRef.current[key], placed: false };
+                                        }
                                         setFileStampsState(prev => {
                                           const copy = { ...prev };
-                                          if (copy[activeDocFile.id]) copy[activeDocFile.id] = { ...copy[activeDocFile.id], placed: false };
+                                          if (copy[key]) copy[key] = { ...copy[key], placed: false };
                                           return copy;
                                         });
-                                        if (fileStampRef.current[activeDocFile.id]) fileStampRef.current[activeDocFile.id].placed = false;
                                       }
                                     }}
                                   >
@@ -1764,6 +1775,24 @@ const SignDocument = () => {
                           onChange={e => setSigPage(Math.max(1, Number(e.target.value)))}
                           className="w-14 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50" />
                       </label>
+                      {/* Show all stamped pages for this file */}
+                      {activeDocFile && (() => {
+                        const stampedPages = Object.entries(fileStampsState)
+                          .filter(([k, cfg]) => k.startsWith(`${activeDocFile.id}:`) && cfg.placed)
+                          .map(([k]) => parseInt(k.split(":")[1]))
+                          .sort((a, b) => a - b);
+                        return stampedPages.length > 0 ? (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="text-[10px] text-muted-foreground">Signed pages:</span>
+                            {stampedPages.map(p => (
+                              <button key={p} onClick={() => setSigPage(p)}
+                                className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-semibold transition ${p === sigPage ? "bg-primary text-primary-foreground" : "bg-green-500/15 text-green-700 dark:text-green-400 hover:bg-green-500/25"}`}>
+                                {p}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
                       {stampPlaced && (
                         <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">
                           {Math.round(sigBoxW)}×{Math.round(sigBoxH)} · x:{Math.round(sigX)} y:{Math.round(sigY)} pg:{sigPage}
@@ -2074,7 +2103,6 @@ const SignDocument = () => {
                     <CheckCircle2 className="w-4 h-4" />
                     Viewed{mySig.signed_at ? ` on ${fmtSignedAt(mySig.signed_at)}` : ""}
                   </div>
-                  {/* Comment box */}
                   <div className="flex flex-col gap-2 pt-1 border-t border-amber-500/20">
                     <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Leave a comment (optional)</p>
                     {mySig.remarks && !viewerCommentSaved ? (
@@ -2164,10 +2192,7 @@ const SignDocument = () => {
                                   const f = e.dataTransfer.files[0];
                                   if (f && f.type === "application/pdf") {
                                     const fileErr = getManualUploadSizeError(f);
-                                    if (fileErr) {
-                                      setError(fileErr);
-                                      return;
-                                    }
+                                    if (fileErr) { setError(fileErr); return; }
                                     setError(null);
                                     setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
                                   }
@@ -2183,11 +2208,7 @@ const SignDocument = () => {
                                     const f = e.target.files?.[0];
                                     if (!f) return;
                                     const fileErr = getManualUploadSizeError(f);
-                                    if (fileErr) {
-                                      setError(fileErr);
-                                      e.target.value = "";
-                                      return;
-                                    }
+                                    if (fileErr) { setError(fileErr); e.target.value = ""; return; }
                                     setError(null);
                                     setManualSignedFiles(prev => ({ ...prev, [docFile.id]: f }));
                                   }} />
@@ -2230,12 +2251,9 @@ const SignDocument = () => {
                     </div>
                   )}
 
-
                   {signMode === "digital" && (
                     <>
-                      <div className="bg-card border border-border rounded-xl overflow-hidden">
-
-                      </div>
+                      <div className="bg-card border border-border rounded-xl overflow-hidden" />
 
                       {signing && signingProgress && (
                         <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-3">
@@ -2246,11 +2264,7 @@ const SignDocument = () => {
                           <div className="mt-2 h-1.5 w-full rounded-full bg-blue-200/70 dark:bg-blue-900/40 overflow-hidden">
                             <div
                               className="h-full bg-blue-600 transition-all duration-300"
-                              style={{
-                                width: `${signingProgress.total > 0
-                                  ? (signingProgress.completed / signingProgress.total) * 100
-                                  : 8}%`,
-                              }}
+                              style={{ width: `${signingProgress.total > 0 ? (signingProgress.completed / signingProgress.total) * 100 : 8}%` }}
                             />
                           </div>
                           <p className="mt-1 text-[11px] text-blue-700/90 dark:text-blue-300/90">
@@ -2266,9 +2280,7 @@ const SignDocument = () => {
                             {signingFailures.slice(0, 8).map((failure, idx) => (
                               <p key={`${failure}-${idx}`} className="break-words">• {failure}</p>
                             ))}
-                            {signingFailures.length > 8 && (
-                              <p>• ...and {signingFailures.length - 8} more</p>
-                            )}
+                            {signingFailures.length > 8 && <p>• ...and {signingFailures.length - 8} more</p>}
                           </div>
                         </div>
                       )}
