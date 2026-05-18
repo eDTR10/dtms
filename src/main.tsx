@@ -45,6 +45,7 @@ const SignDocument       = lazy(() => import("./screens/User/SignDocument.tsx"))
 const SignatureSettings  = lazy(() => import("./screens/User/SignatureSettings.tsx"));
 const UserProfile        = lazy(() => import("./screens/User/UserProfile.tsx"));
 const Suggestions        = lazy(() => import("./screens/User/Suggestions.tsx"));
+const UserManual         = lazy(() => import("./screens/User/UserManual.tsx"));
 
 // Legacy route kept for old links
 const LegacyDashboard = lazy(() => import("./screens/Dashboard.tsx"));
@@ -112,6 +113,7 @@ const router = createBrowserRouter([
       { path: "settings",  element: <Suspense fallback={<Loader />}><SignatureSettings /></Suspense> },
       { path: "profile",   element: <Suspense fallback={<Loader />}><UserProfile /></Suspense> },
       { path: "suggestions", element: <Suspense fallback={<Loader />}><Suggestions /></Suspense> },
+      { path: "manual",    element: <Suspense fallback={<Loader />}><UserManual /></Suspense> },
 
     ],
   },

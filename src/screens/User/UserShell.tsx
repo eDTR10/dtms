@@ -8,6 +8,7 @@ import {
   X,
   UserCircle,
   MessageSquare,
+  HelpCircle,
 } from "lucide-react";
 import viteLogo from "./../../assets/logo.png";
 import { useAuth } from "../Auth/AuthContext";
@@ -24,6 +25,7 @@ const NAV_ITEMS = [
   { label: "Suggestions", icon: <MessageSquare className=" w-4 h-4" />, to: "/dtms/user/suggestions" },
   { label: "Settings", icon: <Settings className="w-4 h-4" />, to: "/dtms/user/settings" },
   { label: "Profile", icon: <UserCircle className="w-4 h-4" />, to: "/dtms/user/profile" },
+  { label: "Manual", icon: <HelpCircle className="w-4 h-4" />, to: "/dtms/user/manual" },
 
 ];
 
