@@ -7,6 +7,22 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DTMS</title>
+  <!-- Clickjacking defense for static hosts (e.g. GitHub Pages) that can't send
+       X-Frame-Options / CSP frame-ancestors headers. The real protection is the
+       HTTP headers set by the server (vite.config.ts headers / Django middleware);
+       this OWASP "legacy" frame-buster covers hosting where headers aren't possible.
+       Note: a <meta> CSP tag can NOT do this — frame-ancestors is ignored in meta. -->
+  <style id="antiClickjack">
+    body { display: none !important; }
+  </style>
+  <script type="text/javascript">
+    if (self === top) {
+      var antiClickjack = document.getElementById("antiClickjack");
+      antiClickjack.parentNode.removeChild(antiClickjack);
+    } else {
+      top.location = self.location;
+    }
+  </script>
   <script type="text/javascript">
     // GitHub Pages SPA redirect restore.
     // The 404.html encodes the path as a ?/ query string.
@@ -24,8 +40,8 @@
       }
     })(window.location);
   </script>
-  <script type="module" crossorigin src="/dtms/assets/index-e6b32f47.js"></script>
-  <link rel="stylesheet" href="/dtms/assets/index-bdf4cff4.css">
+  <script type="module" crossorigin src="/dtms/assets/index-d53cf61c.js"></script>
+  <link rel="stylesheet" href="/dtms/assets/index-80d4f3cd.css">
 </head>
 
 <body>
